@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .routes.auth import router as auth_router
+from .routes.me import router as me_router
 
 
 app = FastAPI(title="PostForge API")
@@ -70,3 +71,4 @@ async def root() -> dict[str, str]:
 
 
 app.include_router(auth_router)
+app.include_router(me_router)
