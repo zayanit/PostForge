@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
@@ -82,6 +83,12 @@ export default function LoginPage() {
         </label>
 
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
+
+        <div className="flex items-center justify-between text-sm">
+          <Link className="text-gray-700 underline underline-offset-4" href="/forgot-password">
+            Forgot password?
+          </Link>
+        </div>
 
         <button
           className="w-full rounded-md bg-black px-4 py-2 text-white disabled:opacity-60"
