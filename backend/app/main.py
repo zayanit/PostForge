@@ -1,3 +1,5 @@
+import json
+import logging
 from collections.abc import Callable
 from uuid import uuid4
 
@@ -8,6 +10,31 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .routes.auth import router as auth_router
 from .routes.me import router as me_router
+
+
+class _JsonLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for key in ("event", "request_id"):
+            value = getattr(record, key, None)
+            if value is not None:
+                payload[key] = value
+        return json.dumps(payload)
+
+
+def _configure_logging() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(_JsonLogFormatter())
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
+
+
+_configure_logging()
 
 
 app = FastAPI(title="PostForge API")

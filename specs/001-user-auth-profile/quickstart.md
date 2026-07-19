@@ -76,3 +76,11 @@ and password reset all work end-to-end. See `data-model.md` for schema and
       `profiles` row (Scenario 4, step 7).
 - [ ] `login_attempts` confirmed to have RLS enabled with no client-facing policies
       (only the backend's service-role connection can read/write it).
+
+## Validation Record
+
+- Scenario 1: covered by signup page and signup/profile auto-create tests.
+- Scenario 2: covered by login/logout/session-enforcement tests.
+- Scenario 3: covered by login lockout tests.
+- Scenario 4: covered by profile contract and RLS tests.
+- Scenario 5: covered by password reset pages and e2e test.

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
+
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from ..config import load_settings
@@ -9,6 +11,7 @@ from ..services.login_guard import LoginGuard, get_login_guard
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 class LoginRequest(BaseModel):
@@ -86,20 +89,28 @@ async def exchange_password_for_token(email: str, password: str) -> dict:
 @router.post("/login")
 async def login(
     payload: LoginRequest,
+    request: Request,
     login_guard: LoginGuard = Depends(get_login_guard),
 ):
     normalized_email = login_guard.normalize_email(payload.email)
+    request_id = getattr(request.state, "request_id", "unknown")
+
+    logger.info("auth.login_attempt", extra={"event": "auth.login_attempt", "request_id": request_id})
 
     if login_guard.is_locked(normalized_email):
+        logger.info("auth.login_locked", extra={"event": "auth.login_locked", "request_id": request_id})
         raise _account_locked()
 
     try:
         token_response = await exchange_password_for_token(normalized_email, payload.password)
     except InvalidCredentialsError:
         login_guard.record_failed_attempt(normalized_email)
+        logger.info("auth.login_invalid_credentials", extra={"event": "auth.login_invalid_credentials", "request_id": request_id})
         raise _invalid_credentials()
     except ProviderUnavailableError:
+        logger.info("auth.login_provider_unavailable", extra={"event": "auth.login_provider_unavailable", "request_id": request_id})
         raise _provider_unavailable()
 
     login_guard.reset(normalized_email)
+    logger.info("auth.login_success", extra={"event": "auth.login_success", "request_id": request_id})
     return token_response

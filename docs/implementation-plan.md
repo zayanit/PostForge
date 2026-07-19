@@ -577,6 +577,7 @@ Authorization: Bearer <supabase_access_token>
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/auth/login` | Exchange email/password for a Supabase session with per-account lockout |
 | GET | `/me` | Get current user profile |
 | PATCH | `/me` | Update current user profile |
 
