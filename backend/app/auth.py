@@ -41,7 +41,7 @@ async def get_current_user(
             audience="authenticated",
         )
     except jwt.PyJWTError:
-        raise _unauthorized()
+        raise _unauthorized() from None
 
     user_id = payload.get("sub")
     if not user_id:

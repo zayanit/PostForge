@@ -33,7 +33,14 @@ export async function middleware(request: NextRequest) {
 
   if (!data.user && isProtected) {
     const redirectUrl = new URL("/login", request.url);
-    return NextResponse.redirect(redirectUrl);
+    const redirectResponse = NextResponse.redirect(redirectUrl);
+    // Carry over any cookie mutations (refreshed/cleared auth cookies) that
+    // getUser() applied to `response` via setAll — a fresh redirect response
+    // otherwise loses them, leaving stale cookies in the browser.
+    response.cookies.getAll().forEach((cookie) => {
+      redirectResponse.cookies.set(cookie);
+    });
+    return redirectResponse;
   }
 
   return response;

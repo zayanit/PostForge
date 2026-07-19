@@ -20,6 +20,7 @@ def _error_response(request_id: str, code: str, message: str, status_code: int) 
                 "request_id": request_id,
             }
         },
+        headers={"X-Request-Id": request_id},
     )
 
 
