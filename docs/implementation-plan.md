@@ -68,35 +68,34 @@ PostForge is a multi-brand SaaS for generating social images. Users create brand
 │                Bunny Magic Container (Single Image)             │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │ Process Supervisor / Entrypoint                          │  │
-│  │  - Starts FastAPI (internal :8000)                       │  │
-│  │  - Starts Next.js (public :3000)                         │  │
+│  │ Process Supervisor / Entrypoint                           │  │
+│  │  - Starts FastAPI (internal :8000)                        │  │
+│  │  - Starts Next.js (public :3000)                          │  │
 │  │  - Handles shutdown/signals for both processes            │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                     │                          │                │
 │                     ▼                          ▼                │
-│               ┌───────────────┐        ┌───────────────┐       │
-│               │   Next.js 14  │        │    FastAPI    │       │
-│               │   (frontend)  │ ─────► │   (backend)   │       │
-│               └───────────────┘        └───────────────┘       │
+│               ┌───────────────┐        ┌───────────────┐        │
+│               │   Next.js 14  │        │    FastAPI    │        │
+│               │   (frontend)  │ ─────► │   (backend)   │        │
+│               └───────────────┘        └───────────────┘        │
 └─────────────────────────────────────────────────────────────────┘
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                          Supabase                                │
+│                          Supabase                               │
 ├─────────────────┬─────────────────┬──────────────┬──────────────┤
 │      Auth       │       DB        │    Vault     │   Storage    │
 │                 │   (with RLS)    │  (secrets)   │  (images)    │
 └─────────────────┴─────────────────┴──────────────┴──────────────┘
                                    │
                                    ▼
-                    ┌──────────────────────────┐
-                    │    Provider APIs         │
-                    │  - OpenAI (gpt-image-2)  │
-                    │  - Gemini API            │
-                    │    (gemini-3-pro-image-  │
-                    │     preview)             │
-                    └──────────────────────────┘
+                    ┌──────────────────────────────┐
+                    │    Provider APIs             │
+                    │  - OpenAI (gpt-image-2)      │
+                    │  - Gemini API                │
+                    │    (gemini-3.1-flash-image)  │
+                    └──────────────────────────────┘
 ```
 
 ### Technology Stack
