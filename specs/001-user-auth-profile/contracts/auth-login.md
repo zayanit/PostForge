@@ -63,6 +63,24 @@ Returned when `login_attempts.locked_until` for this email is in the future. No 
 made to Supabase Auth in this case (the backend short-circuits before checking the
 password), and `failed_count` is not incremented further while locked.
 
+### 502 — Provider temporarily unavailable
+
+```json
+{
+  "error": {
+    "code": "PROVIDER_UNAVAILABLE",
+    "message": "Unable to sign in right now. Please try again.",
+    "request_id": "uuid"
+  }
+}
+```
+
+Returned when the call to Supabase Auth's password-grant endpoint fails transiently
+(request timeout, connection error, or a Supabase 5xx/rate-limit response) rather than
+returning a definitive credential decision. This is a distinct outcome from `400`:
+`login_attempts.failed_count` is **not** incremented, since the failure isn't attributable
+to the submitted credentials (research.md § 1).
+
 ## Non-functional notes
 
 - The backend MUST NOT log the request body (contains a plaintext password) or the
@@ -70,3 +88,10 @@ password), and `failed_count` is not incremented further while locked.
   the plan's Constraints.
 - Email is normalized (trimmed, lowercased) before use as the `login_attempts` key so
   that case/whitespace variants of the same address share one lockout counter.
+- The 400 response's identical body (FR-006) MUST NOT be undermined by a timing
+  side-channel: a request for an unregistered email MUST take a comparable amount of
+  time to a wrong-password request for a registered email. In practice this means an
+  unregistered-email attempt still performs an equivalent password-hash comparison
+  (e.g. against a fixed dummy hash) rather than short-circuiting immediately, so response
+  latency alone cannot reveal whether the email is registered. This is independent of,
+  and does not change, the existing `login_attempts` increment/lockout behavior.

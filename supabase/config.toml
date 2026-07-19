@@ -20,6 +20,8 @@ port = 54323
 enabled = true
 site_url = "http://localhost:3000"
 additional_redirect_urls = ["http://localhost:3000"]
+# FR-003: 8 characters, explicitly configured — Supabase's own platform default is 6.
+minimum_password_length = 8
 
 [realtime]
 enabled = true

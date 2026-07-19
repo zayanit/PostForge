@@ -65,7 +65,7 @@ Web app per plan.md Project Structure: `backend/app/`, `backend/tests/` and `fro
 
 ### Tests for User Story 1
 
-- [ ] T015 [P] [US1] Integration test verifying a `profiles` row is auto-created after signup, in `backend/tests/integration/test_signup_profile_creation.py`
+- [ ] T015 [P] [US1] Integration test verifying a `profiles` row is auto-created after signup, in `backend/tests/integration/test_signup_profile_creation.py` — MUST also assert FR-003's boundary directly against Supabase Auth (not just client-side validation): a 7-character password is rejected by `supabase.auth.signUp()` and an 8-character password is accepted, proving `minimum_password_length = 8` in supabase/config.toml is actually enforced
 
 ### Implementation for User Story 1
 
@@ -85,8 +85,8 @@ Web app per plan.md Project Structure: `backend/app/`, `backend/tests/` and `fro
 
 ### Tests for User Story 2
 
-- [ ] T019 [P] [US2] Contract test for `POST /api/v1/auth/login` (200 success, 400 invalid credentials, 429 locked out) per contracts/auth-login.md, in `backend/tests/contract/test_auth_login.py`
-- [ ] T020 [P] [US2] Integration test for the 5-consecutive-failure lockout flow (including identical behavior for an unregistered email) in `backend/tests/integration/test_login_lockout.py`
+- [ ] T019 [P] [US2] Contract test for `POST /api/v1/auth/login` (200 success, 400 invalid credentials, 429 locked out, 502 provider unavailable) per contracts/auth-login.md, in `backend/tests/contract/test_auth_login.py`
+- [ ] T020 [P] [US2] Integration test for the 5-consecutive-failure lockout flow (including identical behavior for an unregistered email) AND a transient-failure case proving a simulated Supabase timeout/5xx returns 502 without incrementing `login_attempts.failed_count`, in `backend/tests/integration/test_login_lockout.py`
 
 ### Implementation for User Story 2
 
@@ -154,6 +154,8 @@ Web app per plan.md Project Structure: `backend/app/`, `backend/tests/` and `fro
 - [ ] T041 [P] Update `docs/implementation-plan.md` § API Endpoints to add the new `POST /api/v1/auth/login` endpoint, keeping the plan and implementation in sync
 - [ ] T042 Security hardening pass: confirm `login_attempts` has RLS enabled with zero client-facing policies, and confirm no password or access/refresh token appears in any log output
 - [ ] T043 Run all 5 `quickstart.md` validation scenarios end-to-end and record results
+- [ ] T044 [P] Schedule the `login_attempts` retention cleanup as a daily `pg_cron` job per data-model.md's Retention/cleanup policy, in `supabase/migrations/00012_schedule_login_attempts_cleanup.sql`
+- [ ] T045 Set the hosted (production) Supabase project's Auth "Minimum password length" to 8 via the Supabase dashboard/Management API (FR-003) — `supabase/config.toml`'s `minimum_password_length` only applies to local/self-hosted CLI instances, not an already-provisioned hosted project, so this MUST be applied manually and recorded as done before launch
 
 ---
 

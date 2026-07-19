@@ -12,7 +12,7 @@
 
 ### Session 2026-07-19
 
-- Q: What minimum password strength standard should signup enforce? → A: Minimum 8 characters, no composition rules (Supabase Auth default)
+- Q: What minimum password strength standard should signup enforce? → A: Minimum 8 characters, no composition rules (Supabase Auth's own platform default is 6 characters, so this MUST be configured explicitly rather than relied upon — see FR-003)
 - Q: Must a new account verify their email before they can sign in and use the product? → A: No verification required — full access immediately after signup
 - Q: What should happen after repeated failed login attempts for the same account? → A: Temporary lockout after 5 consecutive failed attempts for that account
 

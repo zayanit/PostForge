@@ -7,6 +7,15 @@ calls instead of invoking `supabase.auth.signInWithPassword()` directly. The end
 checks/updates a `login_attempts` table (keyed by normalized email) before and after
 calling Supabase Auth's password-grant token endpoint server-side via `httpx`.
 
+The `login_attempts` counter MUST only be incremented for a **definitive** invalid-credential
+response from Supabase (i.e. Supabase itself rejected the email/password — see
+contracts/auth-login.md's 400 case). Transient provider failures — request timeouts, 5xx
+responses, or Supabase's own rate limiting — are a distinct outcome, MUST NOT increment
+`failed_count`, and MUST NOT be presented to the client as `INVALID_CREDENTIALS`; they
+propagate as a separate error (see contracts/auth-login.md's 502 case). Otherwise a
+Supabase outage or transient blip would incorrectly lock out real users who did nothing
+wrong.
+
 **Rationale**: Supabase Auth's built-in abuse protection is project-wide/IP-based, not a
 per-account "5 consecutive failed attempts" counter, so it cannot satisfy FR-006a as
 specified without a proxy. Tracking attempts by normalized email (rather than by

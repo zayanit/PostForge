@@ -44,9 +44,15 @@ CREATE POLICY profiles_owner_all ON profiles FOR ALL
 | `avatar_url` | text, nullable | Must match `^https?://.+` when present | FR-010 |
 | `created_at` / `updated_at` | timestamptz | Set by DB default / `updated_at` trigger | — |
 
-**Lifecycle**: Created empty (both fields `NULL`) at signup via a Supabase Auth trigger or
-backend post-signup step; updated via `PATCH /api/v1/me`. Never soft-deleted — cascades on
-account deletion, though account deletion itself is out of scope for this feature.
+**Lifecycle**: Created empty (both fields `NULL`) by a Postgres trigger on `auth.users`
+(`on_auth_user_created`, see tasks.md T016) that inserts the `profiles` row in the same
+transaction Supabase Auth uses to create the account. Because the insert is triggered
+inside that transaction rather than performed as a separate backend call after signup
+succeeds, a successful signup and the existence of exactly one `profiles` row are
+atomic — there is no window where an account exists without its profile, and no
+retry/reconciliation logic is needed to close a gap between the two. Updated via
+`PATCH /api/v1/me`. Never soft-deleted — cascades on account deletion, though account
+deletion itself is out of scope for this feature.
 
 **RLS**: Row-level security restricts every operation to `user_id = auth.uid()`, directly
 satisfying FR-011 (a user can never view or modify another user's profile) and the
@@ -84,9 +90,20 @@ ALTER TABLE login_attempts FORCE ROW LEVEL SECURITY;
 no row → (failed attempt) → failed_count=1..4, locked_until=NULL
 failed_count=4 → (5th consecutive failed attempt) → failed_count=5, locked_until=now()+15min
 locked_until set, now() < locked_until → (any attempt) → rejected immediately, generic error, no Supabase call made, failed_count unchanged
-locked_until set, now() >= locked_until → (attempt allowed through again)
+locked_until set, now() >= locked_until → (attempt evaluated fresh) → failed_count and locked_until are reset to 0/NULL as part of the SAME guarded read-modify-write that processes this attempt (see Concurrency below), before the password/lockout decision is made — an expired lock is never left in place to immediately re-trigger off a stale failed_count
 (any attempt while unlocked) → (successful login) → row deleted (or failed_count reset to 0, locked_until=NULL)
 ```
+
+**Concurrency**: All read-modify-write operations against a `login_attempts` row for a
+given email MUST be atomic, so concurrent requests (e.g. a scripted brute-force sending
+parallel attempts) cannot race and under-count `failed_count` — a lost update here would
+silently defeat FR-006a's lockout guarantee. Use either:
+- `SELECT ... FOR UPDATE` on the row inside a transaction before evaluating/incrementing
+  `failed_count`, holding the lock until the transaction commits; or
+- A single atomic `UPDATE ... SET failed_count = failed_count + 1, ... RETURNING *`
+  (letting Postgres serialize the increment) instead of a separate read-then-write.
+
+Either mechanism is acceptable; a plain `SELECT` followed by an unguarded `UPDATE` is not.
 
 **Lockout duration rationale**: 15 minutes is this feature's chosen value for FR-006a's
 "short delay" — long enough to meaningfully slow a brute-force attempt, short enough that
@@ -95,6 +112,16 @@ unreasonable time. No stricter value was specified anywhere upstream (spec.md le
 exact duration to implementation by design); this is documented here as the concrete
 decision so it isn't an untraceable magic number, and can be revisited if product
 feedback suggests otherwise.
+
+**Retention / cleanup**: `login_attempts` is keyed by whatever email is attempted,
+including unregistered ones (by design — see research.md §1), so it can grow unbounded
+from scan/attack traffic if never pruned. Rows are stale once `last_attempt_at` is older
+than 24 hours and the row is not currently locked (`locked_until IS NULL OR locked_until <
+now()`); such rows carry no further lockout meaning and are deleted. This runs as a daily
+scheduled `pg_cron` job (`DELETE FROM login_attempts WHERE last_attempt_at < now() -
+interval '24 hours' AND (locked_until IS NULL OR locked_until < now())`), using the same
+service-role access as the rest of this table — no client-facing code or new API surface
+is needed.
 
 **Not exposed via RLS policies to any client role** — this table is written only by the
 backend's service-role connection from within the `POST /api/v1/auth/login` handler,
