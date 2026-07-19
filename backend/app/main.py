@@ -6,6 +6,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .routes.auth import router as auth_router
+
 
 app = FastAPI(title="PostForge API")
 
@@ -65,3 +67,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 @app.get("/")
 async def root() -> dict[str, str]:
     return {"status": "ok"}
+
+
+app.include_router(auth_router)

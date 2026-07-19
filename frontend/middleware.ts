@@ -1,15 +1,13 @@
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
-const protectedPaths = ["/account", "/dashboard"];
-
 export async function middleware(request: NextRequest) {
   const response = NextResponse.next({ request: { headers: request.headers } });
   if (!supabaseUrl || !supabaseAnonKey) {
-    if (request.nextUrl.pathname.startsWith("/account") || request.nextUrl.pathname.startsWith("/dashboard")) {
+    if (request.nextUrl.pathname === "/" || request.nextUrl.pathname.startsWith("/account")) {
       return NextResponse.redirect(new URL("/login", request.url));
     }
     return response;
@@ -20,7 +18,7 @@ export async function middleware(request: NextRequest) {
       getAll() {
         return request.cookies.getAll();
       },
-      setAll(cookiesToSet: Array<{ name: string; value: string; options?: CookieOptions }>) {
+      setAll(cookiesToSet: Array<{ name: string; value: string; options?: any }>) {
         cookiesToSet.forEach(({ name, value, options }) => {
           response.cookies.set({ name, value, ...options });
         });
@@ -29,7 +27,7 @@ export async function middleware(request: NextRequest) {
   });
 
   const { data } = await supabase.auth.getUser();
-  const isProtected = protectedPaths.some((path) => request.nextUrl.pathname.startsWith(path));
+  const isProtected = request.nextUrl.pathname === "/" || request.nextUrl.pathname.startsWith("/account");
 
   if (!data.user && isProtected) {
     const redirectUrl = new URL("/login", request.url);
@@ -47,5 +45,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/account/:path*", "/dashboard/:path*"],
+  matcher: ["/", "/account", "/account/:path*"],
 };
