@@ -34,10 +34,10 @@ Infrastructure feature — adds root-level packaging artifacts, not a new `front
 
 **Purpose**: Scaffolding needed before any Dockerfile/script content can be written
 
-- [ ] T001 Create root `.dockerignore` excluding `node_modules/`, `.venv/`, `.git/`, `.env*` (except `*.example`), `__pycache__/`, `frontend/.next/`, `frontend/test-results/`, `frontend/playwright-report/`, and other local-only artifacts, in `.dockerignore`
-- [ ] T002 [P] Create `scripts/container-entrypoint.sh` placeholder (shebang `#!/usr/bin/env bash`, `set -euo pipefail`, executable bit set)
-- [ ] T003 [P] Create `scripts/container-healthcheck.sh` placeholder (shebang `#!/usr/bin/env bash`, `set -euo pipefail`, executable bit set)
-- [ ] T004 [P] Create `docs/docker.md` skeleton with section headings: Build, Run Locally, Configuration & Secrets, Healthcheck & Restart Behavior, Deploy to Bunny Magic Container, Troubleshooting
+- [X] T001 Create root `.dockerignore` excluding `node_modules/`, `.venv/`, `.git/`, `.env*` (except `*.example`), `__pycache__/`, `frontend/.next/`, `frontend/test-results/`, `frontend/playwright-report/`, and other local-only artifacts, in `.dockerignore`
+- [X] T002 [P] Create `scripts/container-entrypoint.sh` placeholder (shebang `#!/usr/bin/env bash`, `set -euo pipefail`, executable bit set)
+- [X] T003 [P] Create `scripts/container-healthcheck.sh` placeholder (shebang `#!/usr/bin/env bash`, `set -euo pipefail`, executable bit set)
+- [X] T004 [P] Create `docs/docker.md` skeleton with section headings: Build, Run Locally, Configuration & Secrets, Healthcheck & Restart Behavior, Deploy to Bunny Magic Container, Troubleshooting
 
 ---
 

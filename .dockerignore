@@ -1,0 +1,42 @@
+.git/
+.gitignore
+.dockerignore
+Dockerfile*
+
+# Runtime configuration and secrets
+.env*
+!*.example
+!**/*.example
+
+# JavaScript dependencies and build output
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+coverage/
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+*.egg-info/
+
+# Local tooling and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log*
+*.tmp
+*.swp
+.cache/
+tmp/
+temp/
