@@ -26,8 +26,8 @@ def _signup_and_login(client: httpx.Client, supabase_url: str, supabase_key: str
 
     token_response = client.post(
         f"{supabase_url}/auth/v1/token?grant_type=password",
-        headers={"apikey": supabase_key, "Content-Type": "application/x-www-form-urlencoded"},
-        data={"email": email, "password": password},
+        headers={"apikey": supabase_key, "Content-Type": "application/json"},
+        json={"email": email, "password": password},
     )
     assert token_response.status_code == 200
     access_token = token_response.json()["access_token"]

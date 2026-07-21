@@ -65,11 +65,8 @@ async def exchange_password_for_token(email: str, password: str) -> dict:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
                 url,
-                headers={
-                    "apikey": settings.supabase_secret_key,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-                data={"grant_type": "password", "email": email, "password": password},
+                headers={"apikey": settings.supabase_secret_key},
+                json={"email": email, "password": password},
             )
     except (httpx.TimeoutException, httpx.RequestError) as exc:
         raise ProviderUnavailableError() from exc

@@ -27,6 +27,12 @@ node_modules/
 out/
 next-env.d.ts
 
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/playwright/.cache/
+
 # Build outputs
 dist/
 build/

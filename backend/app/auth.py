@@ -1,8 +1,10 @@
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Annotated
 
 import jwt
 from fastapi import Depends, Header, HTTPException, status
+from jwt import PyJWKClient
 
 from .config import load_settings
 
@@ -21,6 +23,12 @@ def _unauthorized(message: str = "Sign in required.") -> HTTPException:
     )
 
 
+@lru_cache(maxsize=1)
+def _get_jwks_client() -> PyJWKClient:
+    settings = load_settings()
+    return PyJWKClient(f"{settings.supabase_url}/auth/v1/.well-known/jwks.json")
+
+
 async def get_current_user(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> CurrentUser:
@@ -34,12 +42,26 @@ async def get_current_user(
     settings = load_settings()
 
     try:
-        payload = jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
+        algorithm = jwt.get_unverified_header(token).get("alg", "HS256")
+
+        if algorithm == "HS256":
+            # Legacy shared-secret signing, still used by some projects.
+            payload = jwt.decode(
+                token,
+                settings.supabase_jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated",
+            )
+        else:
+            # Newer Supabase projects sign access tokens with an asymmetric
+            # key (e.g. ES256), published via the project's JWKS endpoint.
+            signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=[algorithm],
+                audience="authenticated",
+            )
     except jwt.PyJWTError:
         raise _unauthorized() from None
 

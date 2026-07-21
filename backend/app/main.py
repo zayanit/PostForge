@@ -5,9 +5,11 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .config import load_settings
 from .routes.auth import router as auth_router
 from .routes.me import router as me_router
 
@@ -38,6 +40,14 @@ _configure_logging()
 
 
 app = FastAPI(title="PostForge API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(load_settings().allowed_origins),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _error_response(request_id: str, code: str, message: str, status_code: int) -> JSONResponse:

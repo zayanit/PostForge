@@ -30,7 +30,8 @@ def test_signup_creates_profile_row_and_enforces_password_floor():
                 json={"email": email, "password": short_password},
             )
 
-            assert short_response.status_code == 400
+            assert short_response.status_code == 422
+            assert short_response.json().get("error_code") == "weak_password"
 
             valid_response = client.post(
                 f"{supabase_url}/auth/v1/signup",

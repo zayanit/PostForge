@@ -15,6 +15,16 @@ LOCKOUT_THRESHOLD = 5
 LOCKOUT_MINUTES = 15
 
 
+def _coerce_datetime(value: datetime | str | None) -> datetime | None:
+    # Raw text() queries return whatever type the driver hands back for a
+    # timestamp column. Postgres/psycopg gives a native datetime, but
+    # SQLite (used by this module's own test suite) can hand back an ISO
+    # string instead, which breaks direct comparisons in is_locked().
+    if value is None or isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(value)
+
+
 @dataclass(frozen=True, slots=True)
 class LoginAttemptState:
     email: str
@@ -49,8 +59,8 @@ class LoginGuard:
         return LoginAttemptState(
             email=row["email"],
             failed_count=row["failed_count"],
-            locked_until=row["locked_until"],
-            last_attempt_at=row["last_attempt_at"],
+            locked_until=_coerce_datetime(row["locked_until"]),
+            last_attempt_at=_coerce_datetime(row["last_attempt_at"]),
         )
 
     def is_locked(self, email: str, now: datetime | None = None) -> bool:
@@ -115,8 +125,8 @@ class LoginGuard:
         return LoginAttemptState(
             email=row["email"],
             failed_count=row["failed_count"],
-            locked_until=row["locked_until"],
-            last_attempt_at=row["last_attempt_at"],
+            locked_until=_coerce_datetime(row["locked_until"]),
+            last_attempt_at=_coerce_datetime(row["last_attempt_at"]),
         )
 
     def reset(self, email: str) -> None:

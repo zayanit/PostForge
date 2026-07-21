@@ -14,34 +14,34 @@ export default function ResetPasswordPage() {
   useEffect(() => {
     let active = true;
 
-    async function establishRecoverySession() {
-      // Password reset links use the PKCE flow (?code=...), which requires an
-      // explicit exchange — it is not auto-detected from an existing session.
-      const code = new URLSearchParams(window.location.search).get("code");
-
-      if (code) {
-        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        if (!active) return;
-
-        if (exchangeError) {
-          setMessage(exchangeError.message);
-          return;
-        }
-      }
-
-      const { data } = await supabase.auth.getSession();
+    // The Supabase client auto-detects and exchanges the recovery link's
+    // session (hash fragment or PKCE ?code=, depending on project config)
+    // as part of its own initialization — do NOT exchange it again here.
+    // The PKCE code/verifier are single-use, so a second manual exchange
+    // fails with "code verifier not found in storage" once auto-detection
+    // has already consumed it.
+    supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
-
       setSessionReady(Boolean(data.session));
       if (!data.session) {
         setMessage("Open this page from your password reset email link, then choose a new password.");
       }
-    }
+    });
 
-    void establishRecoverySession();
+    // Auto-detection can complete asynchronously slightly after the initial
+    // getSession() check above, so also listen for the session becoming
+    // available rather than relying solely on that first snapshot.
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active || !session) return;
+      setSessionReady(true);
+      setMessage(null);
+    });
 
     return () => {
       active = false;
+      subscription.unsubscribe();
     };
   }, []);
 

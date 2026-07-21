@@ -1,40 +1,40 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 
-const INBUCKET_URL = process.env.INBUCKET_URL ?? "http://localhost:54324";
+const MAIL_URL = process.env.INBUCKET_URL ?? "http://localhost:54324";
 
-type InboxMessage = { id: string };
+type InboxMessage = { ID: string; To: Array<{ Address: string }> };
 
 async function fetchLatestRecoveryLink(request: APIRequestContext, email: string): Promise<string> {
-  const mailbox = email.split("@")[0];
-
-  // Inbucket needs a moment to receive the outgoing email after the request
-  // that triggers it; poll briefly rather than assuming it's already there.
-  let messages: InboxMessage[] = [];
+  // The local mail testing service (Mailpit) needs a moment to receive the
+  // outgoing email after the request that triggers it; poll briefly rather
+  // than assuming it's already there.
+  let match: InboxMessage | undefined;
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const listResponse = await request.get(`${INBUCKET_URL}/api/v1/mailbox/${mailbox}`);
+    const listResponse = await request.get(`${MAIL_URL}/api/v1/messages`);
     expect(listResponse.ok()).toBeTruthy();
-    messages = await listResponse.json();
-    if (messages.length > 0) {
+    const body = await listResponse.json();
+    const messages: InboxMessage[] = body.messages ?? [];
+    match = messages.find((m) => m.To?.some((to) => to.Address === email));
+    if (match) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  expect(messages.length, `no email received for ${email}`).toBeGreaterThan(0);
-  const latest = messages[messages.length - 1];
+  expect(match, `no email received for ${email}`).toBeDefined();
 
-  const messageResponse = await request.get(`${INBUCKET_URL}/api/v1/mailbox/${mailbox}/${latest.id}`);
+  const messageResponse = await request.get(`${MAIL_URL}/api/v1/message/${match!.ID}`);
   expect(messageResponse.ok()).toBeTruthy();
-  const body = await messageResponse.json();
-  const content: string = body.body?.html || body.body?.text || "";
+  const message = await messageResponse.json();
+  const content: string = message.HTML || message.Text || "";
 
   // Supabase's recovery email links to GoTrue's /auth/v1/verify, which
-  // redirects to our app's redirectTo with the PKCE code attached — this is
-  // the real link a user clicks, not our app's URL directly.
-  const match = content.match(/https?:\/\/[^\s"'<>]*\/auth\/v1\/verify[^\s"'<>]*/);
-  expect(match, `no verification link found in email to ${email}`).not.toBeNull();
+  // redirects to our app's redirectTo — this is the real link a user
+  // clicks, not our app's URL directly.
+  const linkMatch = content.match(/https?:\/\/[^\s"'<>]*\/auth\/v1\/verify[^\s"'<>]*/);
+  expect(linkMatch, `no verification link found in email to ${email}`).not.toBeNull();
 
-  return match![0].replace(/&amp;/g, "&");
+  return linkMatch![0].replace(/&amp;/g, "&");
 }
 
 test("password reset request and confirm flow works via a real emailed link", async ({ page, request }) => {
@@ -54,20 +54,27 @@ test("password reset request and confirm flow works via a real emailed link", as
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page).toHaveURL(/\/login$/);
 
+  // Request the unregistered-email case FIRST: resetPasswordForEmail()
+  // stores its PKCE code verifier in a single, unparameterized cookie, so a
+  // later request would overwrite the verifier the real email's link needs
+  // — requesting this one first means it's the one that gets overwritten,
+  // not the one we actually follow below.
   await page.goto("/forgot-password");
-  await page.getByLabel("Email").fill(unique);
+  await page.getByLabel("Email").fill(`missing-${Date.now()}@example.com`);
   await page.getByRole("button", { name: "Send reset link" }).click();
   await expect(page.getByText(/If an account exists/i)).toBeVisible();
 
   await page.goto("/forgot-password");
-  await page.getByLabel("Email").fill(`missing-${Date.now()}@example.com`);
+  await page.getByLabel("Email").fill(unique);
   await page.getByRole("button", { name: "Send reset link" }).click();
   await expect(page.getByText(/If an account exists/i)).toBeVisible();
 
   const recoveryLink = await fetchLatestRecoveryLink(request, unique);
 
   // Follow the real link: GoTrue verifies the token server-side, then
-  // redirects the browser to /reset-password?code=... in our app.
+  // redirects the browser to /reset-password in our app (with the session
+  // token attached, either as a #hash fragment or a ?code= param depending
+  // on project configuration — the page handles both).
   await page.goto(recoveryLink);
   await expect(page).toHaveURL(/\/reset-password/);
 
