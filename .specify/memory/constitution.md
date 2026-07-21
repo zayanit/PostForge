@@ -1,21 +1,21 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 0.0.0 → 1.0.0
-Bump rationale: MAJOR - Initial constitution adoption for new project
+Version change: 1.0.0 → 1.1.0
+Bump rationale: MINOR - Clarified Principle I / Tech Constraints to exempt foundational
+  account infrastructure (auth, user profile) from the "sole product capability" rule,
+  and corrected product name (PostForge AI, matching docs/implementation-plan.md
+  and the repository name). Resolves a CRITICAL finding from /speckit-analyze on
+  specs/001-user-auth-profile: the literal prior wording ("Image generation is the sole
+  product capability") would have forbidden building any authentication feature at all,
+  which is required before brand/generation features can exist.
 
-Modified principles: N/A (initial version)
-Added sections:
-  - Principle I: Product Truth
-  - Principle II: Non-Negotiables
-  - Principle III: Tech Constraints
-  - Principle IV: Data Rules
-  - Principle V: UX Rules
-  - Principle VI: Security Rules
-  - Principle VII: Definition of Done
-  - Governance section
+Modified principles:
+  - I. Product Truth: added explicit foundational-infrastructure exemption
+  - III. Tech Constraints: "Capability" row reworded to clarify scope
 
-Removed sections: N/A (initial version)
+Added sections: None
+Removed sections: None
 
 Templates status:
   - .specify/templates/plan-template.md ✅ No updates needed - generic Constitution Check section will inherit
@@ -23,22 +23,27 @@ Templates status:
   - .specify/templates/tasks-template.md ✅ No updates needed - task structure supports RLS tests & hard delete verification
   - .specify/templates/checklist-template.md ✅ No updates needed - generic template
   - .specify/templates/agent-file-template.md ✅ No updates needed - generic template
+  - specs/001-user-auth-profile/plan.md ✅ Constitution Check already anticipated this exemption (marked N/A with rationale); no change needed now that it's ratified here
 
 Deferred TODOs: None
 -->
 
-# Basar AI Constitution
+# PostForge Constitution
 
 ## Core Principles
 
 ### I. Product Truth
 
-Basar AI is a multi-brand SaaS for generating social images with the following foundational rules:
+PostForge is a multi-brand SaaS for generating social images with the following foundational rules:
 
 - Tenancy MUST be based on Brand; every resource belongs to exactly one brand
 - One user owns brands; sharing is not supported; only owner role exists
 - No billing in MVP; users MUST provide their own API keys (BYOK model)
-- Image generation is the sole product capability
+- Image generation is the sole product **capability** — i.e., the only thing a Brand can
+  be used to *do*. This does not restrict foundational account infrastructure (user
+  authentication, session management, user profile) that must exist before a Brand can
+  be created in the first place; such infrastructure is a prerequisite, not a competing
+  product capability, and is governed by Principles III and VI instead.
 
 ### II. Non-Negotiables
 
@@ -61,7 +66,7 @@ The technology stack is fixed for MVP:
 | Auth, DB, Vault, Storage | Supabase |
 | Hosting | Bunny Magic Containers |
 | Providers | OpenAI, Gemini |
-| Capability | Image generation only |
+| Capability | Image generation is the only product capability (see Principle I for the account-infrastructure exemption) |
 
 Deviations from this stack require explicit constitutional amendment.
 
@@ -123,4 +128,4 @@ A feature is complete only when ALL of the following are verified:
 - Plan documents MUST include a Constitution Check section
 - Definition of Done checklist MUST be completed before feature merge
 
-**Version**: 1.0.0 | **Ratified**: 2025-01-28 | **Last Amended**: 2025-01-28
+**Version**: 1.1.0 | **Ratified**: 2025-01-28 | **Last Amended**: 2026-07-19

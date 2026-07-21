@@ -1,0 +1,38 @@
+project_id = "postforge"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000"]
+# FR-003: 8 characters, explicitly configured — Supabase's own platform default is 6.
+minimum_password_length = 8
+
+[realtime]
+enabled = true
+
+# Not used by this project (no log-analytics UI needed); disabled to avoid a
+# flaky Logflare healthcheck that was blocking local startup.
+[analytics]
+enabled = false
+
+[local_smtp]
+enabled = true
+port = 54324
+smtp_port = 54325
+pop3_port = 54326

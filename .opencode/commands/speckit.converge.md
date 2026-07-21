@@ -199,11 +199,18 @@ Append to the **end** of `tasks.md`, per the append contract:
    (highest existing phase + 1).
 2. Write a single new section header `## Phase N: Convergence`.
 3. Emit one checklist item per actionable finding, ordered CRITICAL/HIGH first, assigning
-   zero-padded IDs `T{M+1:03d}, T{M+2:03d}, …`:
+   zero-padded IDs `T{M+1:03d}, T{M+2:03d}, …`, following the same checkbox/ID/marker
+   format as `/speckit.tasks` (`- [ ] [TaskID] [P?] [Story?] Description with file path`):
 
    ```markdown
-   - [ ] T042 <imperative description> per <source-ref> (<gap-type>)
+   - [ ] T042 [P?] [Story?] <imperative description with concrete file path> per <source-ref> (<gap-type>)
    ```
+
+   Include `[P]` only when the task is parallelizable (different file, no dependency on an
+   incomplete task). Include `[Story]` (e.g. `[US1]`) only when `<source-ref>` identifies a
+   specific user story (e.g. `US1/AC2`); omit it for plan-level or constitution-level
+   findings, matching `/speckit.tasks`'s rule that Setup/Foundational/Polish tasks carry no
+   story label.
 
    `<source-ref>` traces the task to its origin: e.g. `FR-003`, `SC-002`,
    `US1/AC2`, `plan: storage decision`, `Constitution II`.
