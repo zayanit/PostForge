@@ -8,6 +8,13 @@
 
 **Input**: User description: "Read @docs/implementation-plan.md and create a specification for phase 2 Dockerization"
 
+## Clarifications
+
+### Session 2026-07-22
+
+- Q: When just one process (frontend or backend) crashes mid-run inside the container, what should happen? → A: The entrypoint supervises both processes and restarts just the one that crashed, keeping the container alive.
+- Q: Does the container's "healthy" status require confirming the backend can currently reach Supabase, or only that both processes are up and responding? → A: Healthy means both processes are up and responding — no check of connectivity to Supabase or other external services.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Build and run the whole app as one container (Priority: P1)
@@ -59,7 +66,7 @@ As the operator, I can follow written documentation to build, run, and deploy th
 
 ### Edge Cases
 
-- What happens if the frontend process crashes but the backend keeps running (or vice versa)? The container's health status must reflect the failure, and the container should not continue reporting itself as fully healthy with only one process alive.
+- What happens if the frontend process crashes but the backend keeps running (or vice versa)? The container's health status must reflect the failure while the crashed process is down, and the entrypoint must restart only that process — the healthy process and the container itself keep running.
 - What happens when the operator stops the container while it's mid-startup (before both processes are ready)? Shutdown must still be clean, with no leftover processes.
 - What happens if someone tries to reach the backend directly instead of through the frontend? The backend must not be reachable from outside the container; only the frontend's single public port is exposed.
 - What happens if required runtime configuration (e.g., credentials the app needs to reach its external services) is missing when the container starts? The container should fail to become healthy rather than silently running in a broken state.
@@ -72,7 +79,8 @@ As the operator, I can follow written documentation to build, run, and deploy th
 - **FR-001**: The system MUST provide a single container image that packages and runs both the frontend and the backend together.
 - **FR-002**: The system MUST expose exactly one publicly reachable network address (the frontend); the backend MUST NOT be reachable from outside the container.
 - **FR-003**: The system MUST start both the frontend and backend from a single entrypoint, and MUST stop both cleanly (no orphaned processes) when the container receives a stop signal.
-- **FR-004**: The system MUST expose a combined health status that reflects the readiness of both the frontend and the backend — the status MUST NOT report healthy unless both are actually able to serve requests.
+- **FR-003a**: If either the frontend or the backend process crashes while the container keeps running, the entrypoint MUST restart only the crashed process, without restarting the other process or the container itself.
+- **FR-004**: The system MUST expose a combined health status that reflects the readiness of both the frontend and the backend — the status MUST NOT report healthy unless both are actually able to serve requests. Health MUST be based only on the frontend and backend processes themselves; it MUST NOT depend on the current reachability of external services such as Supabase.
 - **FR-005**: The system MUST NOT include secret values (API keys, credentials, tokens) inside the built image; all secrets MUST be supplied at container start time through runtime configuration, not baked in at build time.
 - **FR-006**: The system MUST run the application processes inside the container as a non-privileged (non-root) user.
 - **FR-007**: The build process MUST exclude files unnecessary to running the app (local dependency caches, local env files, build artifacts, version control metadata) from what gets sent to the image build.
@@ -94,5 +102,5 @@ As the operator, I can follow written documentation to build, run, and deploy th
 - The target hosting platform is a single-image container host (Bunny Magic Container, per the existing architecture decision); this feature covers packaging the app for that model, not multi-container orchestration or autoscaling.
 - Supabase (Auth, Database, Storage, Vault) continues to run externally as a managed service; this feature only concerns packaging the frontend and backend application code, not containerizing Supabase itself.
 - Local day-to-day development (running frontend/backend directly on the host) remains unchanged; this feature adds a deployable packaging path alongside it, not a replacement for local dev workflow.
-- "Health" here means a liveness/readiness signal for both processes, not a full synthetic end-to-end transaction test.
+- "Health" here means a liveness/readiness signal for both processes only, not a full synthetic end-to-end transaction test and not a check of connectivity to external services (e.g., Supabase).
 - Runtime configuration (including secrets) is supplied via the hosting platform's environment/secret mechanism at container start; how the operator manages secrets outside the container (e.g., a secrets vault or host environment) is out of scope for this feature.
