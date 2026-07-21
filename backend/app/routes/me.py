@@ -25,8 +25,11 @@ def _not_found() -> HTTPException:
 
 @router.get("/api/v1/me", response_model=Profile)
 def get_me(request: Request, current_user: CurrentUserDep, profile_store: ProfileStoreDep) -> Profile:
+    if not current_user.email:
+        raise _not_found()
+
     try:
-        profile = profile_store.get_profile(current_user.user_id, current_user.email or "")
+        profile = profile_store.get_profile(current_user.user_id, current_user.email)
         logger.info("me.get_success", extra={"event": "me.get_success", "request_id": getattr(request.state, "request_id", "unknown")})
         return profile
     except LookupError as exc:
@@ -40,8 +43,11 @@ def patch_me(
     current_user: CurrentUserDep,
     profile_store: ProfileStoreDep,
 ) -> Profile:
+    if not current_user.email:
+        raise _not_found()
+
     try:
-        profile = profile_store.update_profile(current_user.user_id, current_user.email or "", payload)
+        profile = profile_store.update_profile(current_user.user_id, current_user.email, payload)
         logger.info("me.patch_success", extra={"event": "me.patch_success", "request_id": getattr(request.state, "request_id", "unknown")})
         return profile
     except LookupError as exc:

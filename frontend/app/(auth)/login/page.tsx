@@ -22,36 +22,39 @@ export default function LoginPage() {
     setSubmitting(true);
     setError(null);
 
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "/api"}/v1/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: values.email,
-        password: values.password,
-      }),
-    });
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "/api"}/v1/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: values.email,
+          password: values.password,
+        }),
+      });
 
-    const body = await response.json();
+      const body = await response.json();
 
-    if (!response.ok) {
-      setError(body?.error?.message ?? "Unable to sign in.");
+      if (!response.ok) {
+        setError(body?.error?.message ?? "Unable to sign in.");
+        return;
+      }
+
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: body.access_token,
+        refresh_token: body.refresh_token,
+      });
+
+      if (sessionError) {
+        setError(sessionError.message);
+        return;
+      }
+
+      router.push("/");
+    } catch {
+      setError("Unable to sign in. Please try again.");
+    } finally {
       setSubmitting(false);
-      return;
     }
-
-    const { error: sessionError } = await supabase.auth.setSession({
-      access_token: body.access_token,
-      refresh_token: body.refresh_token,
-    });
-
-    setSubmitting(false);
-
-    if (sessionError) {
-      setError(sessionError.message);
-      return;
-    }
-
-    router.push("/");
   }
 
   return (

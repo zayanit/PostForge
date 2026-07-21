@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from ..config import load_settings
+from ..config import get_engine
 from ..models.profile import Profile, ProfileUpdate
 
 
@@ -62,9 +62,4 @@ class ProfileStore:
 
 @lru_cache(maxsize=1)
 def get_profile_store() -> ProfileStore:
-    settings = load_settings()
-    if not settings.database_url:
-        raise RuntimeError("DATABASE_URL is required")
-
-    engine = create_engine(settings.database_url, future=True, pool_pre_ping=True)
-    return ProfileStore(engine)
+    return ProfileStore(get_engine())

@@ -75,24 +75,30 @@ export default function AccountPage() {
 
       setEmail(session.user.email ?? "");
 
-      const response = await fetch(`${apiBase}/v1/me`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
+      try {
+        const response = await fetch(`${apiBase}/v1/me`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
 
-      if (!response.ok) {
-        setLoadError("Unable to load your profile.");
-        return;
+        if (!response.ok) {
+          setLoadError("Unable to load your profile.");
+          return;
+        }
+
+        const profile: ProfileResponse = await response.json();
+        if (!active) {
+          return;
+        }
+
+        reset({
+          full_name: profile.full_name ?? "",
+          avatar_url: profile.avatar_url ?? "",
+        });
+      } catch {
+        if (active) {
+          setLoadError("Unable to load your profile.");
+        }
       }
-
-      const profile: ProfileResponse = await response.json();
-      if (!active) {
-        return;
-      }
-
-      reset({
-        full_name: profile.full_name ?? "",
-        avatar_url: profile.avatar_url ?? "",
-      });
     }
 
     void loadProfile();
@@ -126,26 +132,30 @@ export default function AccountPage() {
           payload.avatar_url = avatarUrl;
         }
 
-        const response = await fetch(`${apiBase}/v1/me`, {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
+        try {
+          const response = await fetch(`${apiBase}/v1/me`, {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
 
-        const body = await response.json();
-        if (!response.ok) {
-          setLoadError(body?.error?.message ?? "Unable to save profile.");
-          return;
+          const body = await response.json();
+          if (!response.ok) {
+            setLoadError(body?.error?.message ?? "Unable to save profile.");
+            return;
+          }
+
+          reset({
+            full_name: body.full_name ?? "",
+            avatar_url: body.avatar_url ?? "",
+          });
+          setStatus("Profile updated.");
+        } catch {
+          setLoadError("Unable to save profile.");
         }
-
-        reset({
-          full_name: body.full_name ?? "",
-          avatar_url: body.avatar_url ?? "",
-        });
-        setStatus("Profile updated.");
       }),
     [apiBase, handleSubmit, reset, router],
   );

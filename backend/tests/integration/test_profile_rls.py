@@ -43,45 +43,62 @@ def test_profiles_row_level_security_blocks_cross_user_access():
     email_b = f"rls-b-{uuid4().hex[:10]}@example.com"
     password = "12345678"
 
+    user_a_id: str | None = None
+    user_b_id: str | None = None
+
     with httpx.Client(timeout=30.0) as client:
-        user_a_id, token_a = _signup_and_login(client, supabase_url, supabase_key, email_a, password)
-        _user_b_id, token_b = _signup_and_login(client, supabase_url, supabase_key, email_b, password)
+        try:
+            user_a_id, token_a = _signup_and_login(client, supabase_url, supabase_key, email_a, password)
+            user_b_id, token_b = _signup_and_login(client, supabase_url, supabase_key, email_b, password)
 
-        own_read = client.get(
-            f"{supabase_url}/rest/v1/profiles",
-            params={"select": "user_id,full_name,avatar_url", "user_id": f"eq.{user_a_id}"},
-            headers={"apikey": supabase_key, "Authorization": f"Bearer {token_a}"},
-        )
-        assert own_read.status_code == 200
-        own_rows = own_read.json()
-        assert len(own_rows) == 1
-        assert own_rows[0]["user_id"] == user_a_id
+            own_read = client.get(
+                f"{supabase_url}/rest/v1/profiles",
+                params={"select": "user_id,full_name,avatar_url", "user_id": f"eq.{user_a_id}"},
+                headers={"apikey": supabase_key, "Authorization": f"Bearer {token_a}"},
+            )
+            assert own_read.status_code == 200
+            own_rows = own_read.json()
+            assert len(own_rows) == 1
+            assert own_rows[0]["user_id"] == user_a_id
 
-        cross_read = client.get(
-            f"{supabase_url}/rest/v1/profiles",
-            params={"select": "user_id,full_name,avatar_url", "user_id": f"eq.{user_a_id}"},
-            headers={"apikey": supabase_key, "Authorization": f"Bearer {token_b}"},
-        )
-        assert cross_read.status_code == 200
-        assert cross_read.json() == []
+            cross_read = client.get(
+                f"{supabase_url}/rest/v1/profiles",
+                params={"select": "user_id,full_name,avatar_url", "user_id": f"eq.{user_a_id}"},
+                headers={"apikey": supabase_key, "Authorization": f"Bearer {token_b}"},
+            )
+            assert cross_read.status_code == 200
+            assert cross_read.json() == []
 
-        cross_write = client.patch(
-            f"{supabase_url}/rest/v1/profiles",
-            params={"user_id": f"eq.{user_a_id}"},
-            headers={
-                "apikey": supabase_key,
-                "Authorization": f"Bearer {token_b}",
-                "Content-Type": "application/json",
-                "Prefer": "return=representation",
-            },
-            json={"full_name": "Hacked Name"},
-        )
-        assert cross_write.status_code in {200, 204}
+            cross_write = client.patch(
+                f"{supabase_url}/rest/v1/profiles",
+                params={"user_id": f"eq.{user_a_id}"},
+                headers={
+                    "apikey": supabase_key,
+                    "Authorization": f"Bearer {token_b}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+                json={"full_name": "Hacked Name"},
+            )
+            assert cross_write.status_code in {200, 204}
 
-        reread = client.get(
-            f"{supabase_url}/rest/v1/profiles",
-            params={"select": "user_id,full_name,avatar_url", "user_id": f"eq.{user_a_id}"},
-            headers={"apikey": supabase_key, "Authorization": f"Bearer {token_a}"},
-        )
-        assert reread.status_code == 200
-        assert reread.json()[0]["full_name"] is None
+            reread = client.get(
+                f"{supabase_url}/rest/v1/profiles",
+                params={"select": "user_id,full_name,avatar_url", "user_id": f"eq.{user_a_id}"},
+                headers={"apikey": supabase_key, "Authorization": f"Bearer {token_a}"},
+            )
+            assert reread.status_code == 200
+            assert reread.json()[0]["full_name"] is None
+        finally:
+            # Delete both test users via the GoTrue admin API so repeated
+            # runs don't accumulate stray users, mirroring the cleanup
+            # pattern in test_signup_profile_creation.py.
+            for user_id in (user_a_id, user_b_id):
+                if user_id:
+                    client.delete(
+                        f"{supabase_url}/auth/v1/admin/users/{user_id}",
+                        headers={
+                            "apikey": supabase_key,
+                            "Authorization": f"Bearer {supabase_key}",
+                        },
+                    )

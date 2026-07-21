@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from ..config import load_settings
+from ..config import get_engine
 from ..models.login_attempt import LoginAttempt
 
 
@@ -137,9 +137,4 @@ class LoginGuard:
 
 @lru_cache(maxsize=1)
 def get_login_guard() -> LoginGuard:
-    settings = load_settings()
-    if not settings.database_url:
-        raise RuntimeError("DATABASE_URL is required")
-
-    engine = create_engine(settings.database_url, future=True, pool_pre_ping=True)
-    return LoginGuard(engine)
+    return LoginGuard(get_engine())

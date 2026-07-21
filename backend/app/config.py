@@ -1,5 +1,9 @@
 from dataclasses import dataclass
+from functools import lru_cache
 import os
+
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 
 
 _DEFAULT_ALLOWED_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
@@ -23,3 +27,12 @@ def load_settings() -> Settings:
         database_url=os.getenv("DATABASE_URL"),
         allowed_origins=tuple(origin.strip() for origin in origins.split(",") if origin.strip()),
     )
+
+
+@lru_cache(maxsize=1)
+def get_engine() -> Engine:
+    settings = load_settings()
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL is required")
+
+    return create_engine(settings.database_url, future=True, pool_pre_ping=True)

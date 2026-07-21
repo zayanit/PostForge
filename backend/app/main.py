@@ -1,6 +1,7 @@
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -36,10 +37,13 @@ def _configure_logging() -> None:
     root.setLevel(logging.INFO)
 
 
-_configure_logging()
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    _configure_logging()
+    yield
 
 
-app = FastAPI(title="PostForge API")
+app = FastAPI(title="PostForge API", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
