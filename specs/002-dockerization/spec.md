@@ -44,8 +44,8 @@ As the operator, I can check the container's health status and get an accurate a
 **Acceptance Scenarios**:
 
 1. **Given** a freshly started container, **When** both the frontend and backend have finished starting, **Then** the container's health status reports healthy.
-2. **Given** a running, healthy container, **When** the backend process stops responding, **Then** the health status reports unhealthy within one check interval.
-3. **Given** a running, healthy container, **When** the frontend process stops responding, **Then** the health status reports unhealthy within one check interval.
+2. **Given** a running, healthy container, **When** the backend process stops responding, **Then** the health status reports unhealthy after the configured number of consecutive failed checks (not necessarily the very next check).
+3. **Given** a running, healthy container, **When** the frontend process stops responding, **Then** the health status reports unhealthy after the configured number of consecutive failed checks (not necessarily the very next check).
 
 ---
 
@@ -69,7 +69,7 @@ As the operator, I can follow written documentation to build, run, and deploy th
 - What happens if the frontend process crashes but the backend keeps running (or vice versa)? The container's health status must reflect the failure while the crashed process is down, and the entrypoint must restart only that process — the healthy process and the container itself keep running.
 - What happens when the operator stops the container while it's mid-startup (before both processes are ready)? Shutdown must still be clean, with no leftover processes.
 - What happens if someone tries to reach the backend directly instead of through the frontend? The backend must not be reachable from outside the container; only the frontend's single public port is exposed.
-- What happens if required runtime configuration (e.g., credentials the app needs to reach its external services) is missing when the container starts? The container should fail to become healthy rather than silently running in a broken state.
+- What happens if required runtime configuration (e.g., credentials the app needs to reach its external services) is missing when the container starts? This is a local startup-validation failure, not a live reachability check: the affected process (frontend or backend) fails to start against its own missing/invalid configuration, so it never reaches the point of responding to the healthcheck, and the container should fail to become healthy rather than silently running in a broken state. This does not conflict with health being process-only (FR-004) — the healthcheck itself still never calls out to Supabase or any other external service; it simply never sees the affected process become ready.
 - What happens on a rebuild — does the build produce the same result given the same source and pinned versions? The build must not silently pick up a newer, unpinned version of a base image or dependency.
 
 ## Requirements *(mandatory)*
@@ -80,7 +80,7 @@ As the operator, I can follow written documentation to build, run, and deploy th
 - **FR-002**: The system MUST expose exactly one publicly reachable network address (the frontend); the backend MUST NOT be reachable from outside the container.
 - **FR-003**: The system MUST start both the frontend and backend from a single entrypoint, and MUST stop both cleanly (no orphaned processes) when the container receives a stop signal.
 - **FR-003a**: If either the frontend or the backend process crashes while the container keeps running, the entrypoint MUST restart only the crashed process, without restarting the other process or the container itself.
-- **FR-004**: The system MUST expose a combined health status that reflects the readiness of both the frontend and the backend — the status MUST NOT report healthy unless both are actually able to serve requests. Health MUST be based only on the frontend and backend processes themselves; it MUST NOT depend on the current reachability of external services such as Supabase.
+- **FR-004**: The system MUST expose a combined health status that reflects the readiness of both the frontend and the backend — the status MUST NOT report healthy unless both are actually able to serve requests. Health MUST be based only on the frontend and backend processes themselves; it MUST NOT depend on the current reachability of external services such as Supabase. (Missing local configuration causing a process to fail at startup is a process-level failure the healthcheck naturally observes as "not responding" — this is distinct from, and does not require, the healthcheck making its own live call to an external service.)
 - **FR-005**: The system MUST NOT include secret values (API keys, credentials, tokens) inside the built image; all secrets MUST be supplied at container start time through runtime configuration, not baked in at build time.
 - **FR-006**: The system MUST run the application processes inside the container as a non-privileged (non-root) user.
 - **FR-007**: The build process MUST exclude files unnecessary to running the app (local dependency caches, local env files, build artifacts, version control metadata) from what gets sent to the image build.
@@ -93,7 +93,7 @@ As the operator, I can follow written documentation to build, run, and deploy th
 
 - **SC-001**: An operator following the documentation can go from a clean checkout to a running, fully-functional local container in under 10 minutes.
 - **SC-002**: Scanning the running container from outside shows exactly one reachable network address; the backend is not independently reachable.
-- **SC-003**: The container's health status reports healthy within 60 seconds of starting under normal conditions, and flips to unhealthy within one check interval whenever either the frontend or backend stops responding.
+- **SC-003**: The container's health status reports healthy within 60 seconds of starting under normal conditions, and flips to unhealthy after 3 consecutive failed checks (per the configured healthcheck interval/retries — see `contracts/healthcheck.md`) whenever either the frontend or backend stops responding.
 - **SC-004**: 100% of container stop/restart cycles result in both processes stopping and restarting cleanly, with no manual cleanup required.
 - **SC-005**: Inspecting the built image's contents and history reveals zero secret values.
 

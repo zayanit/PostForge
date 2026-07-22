@@ -12,8 +12,23 @@ decisions needed to satisfy those clarified requirements, not open unknowns abou
 (`pip install -r requirements.txt`), and the final runtime stage is `python:3.11-slim`
 with Node.js 20 installed alongside it (to run `next start`), copying in the built
 frontend (`.next/`, `node_modules` production deps, `public/`) and the backend's
-installed site-packages + app code. All base image tags are pinned to a specific
-`major.minor.patch` digest, never `latest` or a bare major tag (FR-009).
+installed site-packages + app code.
+
+**Reproducibility policy (FR-009), stated explicitly per dependency source**:
+- **Base images**: pinned by immutable digest, not just a version tag — e.g.
+  `node:20-slim@sha256:<digest>` and `python:3.11-slim@sha256:<digest>`. A tag like
+  `20-slim` can be repointed to a new underlying image at any time; only the digest
+  guarantees the same bytes on every build.
+- **Python dependencies**: `backend/requirements.txt` currently pins ranges
+  (e.g. `fastapi>=0.115,<1`), which is not sufficient for byte-for-byte reproducibility on
+  its own. The backend dependency stage installs from a generated, hash-verified lock file
+  (`pip-compile --generate-hashes` output, or equivalent) via
+  `pip install --require-hashes -r <lockfile>`, so the exact resolved version and package
+  hash are fixed, not just the range.
+- **`tini` and apt-installed packages**: installed with an explicit version pin
+  (e.g. `apt-get install -y --no-install-recommends tini=<pinned-version>`), not a bare
+  `apt-get install tini` that resolves to whatever the base image's package index currently
+  serves.
 
 **Rationale**: The runtime stage must contain *both* a Node runtime (for `next start`)
 and a Python runtime (for `uvicorn`), since both processes run inside the same container
@@ -39,11 +54,17 @@ Alpine's default `dash` shell lacks.
 
 **Decision**: A bash entrypoint script (`scripts/container-entrypoint.sh`), run under
 `tini` as PID 1, starts both `uvicorn` (backend, bound to `127.0.0.1` only) and
-`next start` (frontend, bound to the public port) as background jobs. A supervision loop
-uses `wait -n` to block until *either* job exits, identifies which one via its saved PID,
-restarts only that one, and loops. A `trap` on `SIGTERM`/`SIGINT` sets a shutting-down
-flag and forwards the signal to both children before exiting, so a deliberate container
-stop does not get mistaken for a crash and trigger a restart.
+`next start` (frontend, bound to the public port) as background jobs, saving each one's
+PID (`$!`). A supervision loop uses `wait -n` to block until *either* job exits. Because
+the script runs under `set -euo pipefail`, and `wait -n` itself returns the exited job's
+(possibly nonzero) exit status, the loop captures that status explicitly (e.g.
+`wait -n; status=$?` guarded with `|| true` / an `if` test) rather than letting a nonzero
+status trip `set -e` and kill the entrypoint. The loop then checks each saved PID with
+`kill -0 "$pid" 2>/dev/null` to determine which one is no longer running — identifying the
+exited child *before* deciding to restart it — restarts only that one process, and
+replaces its saved PID with the new one. A `trap` on `SIGTERM`/`SIGINT` sets a
+shutting-down flag and forwards the signal to both children before exiting, so a
+deliberate container stop does not get mistaken for a crash and trigger a restart.
 
 **Rationale**: Directly implements the spec clarification (FR-003a): a crashed process is
 restarted individually, not by restarting the container. `tini` as PID 1 handles the
@@ -66,12 +87,25 @@ policy, which is the one piece of behavior specific to this feature.
 ## Decision 3: Healthcheck mechanism
 
 **Decision**: A single `scripts/container-healthcheck.sh`, invoked by the Dockerfile's
-`HEALTHCHECK` instruction, does two local checks: `curl -f http://127.0.0.1:8000/health`
-(backend, new route) and `curl -f http://127.0.0.1:3000/` (frontend — Next.js's own root
-response is sufficient evidence of readiness; no new frontend route needed). The script
-exits 0 (healthy) only if both succeed, and exits non-zero otherwise. Per the
-clarification, neither check touches Supabase or any other external dependency — both are
-purely "is this local process answering."
+`HEALTHCHECK` instruction, does two local checks against `http://127.0.0.1:8000/health`
+(backend, new route) and `http://127.0.0.1:3000/` (frontend — Next.js's own root response
+is sufficient evidence of readiness; no new frontend route needed). Each check uses
+`curl --silent --show-error --max-redirs 0 --output /dev/null --write-out '%{http_code}'`
+and explicitly compares the returned code against the `2xx` range, rather than relying on
+`curl -f` alone: `-f` only fails on HTTP status >= 400, so without also capping redirects
+(`--max-redirs 0`) and checking the code directly, a `3xx` response would be treated as a
+pass even though it isn't the expected `200 OK`. The script exits 0 (healthy) only if both
+checks return a `2xx` code, and exits non-zero otherwise. Per the clarification, neither
+check touches Supabase or any other external dependency — both are purely "is this local
+process answering with a real success status."
+
+**Docker `HEALTHCHECK` timing values**: `--interval=10s --timeout=5s --start-period=30s
+--retries=3`. These are the concrete numbers referenced by SC-003 and
+`contracts/healthcheck.md`: a container reports `unhealthy` only after 3 consecutive
+failed checks post-start-period (worst case ~30-35s after a process actually stops
+responding, not "within one check interval" — that phrasing undersold how Docker's
+`HEALTHCHECK` retry counter actually works, and has been corrected in the spec and
+contract).
 
 **Rationale**: Matches FR-004 and the clarified healthcheck-depth decision exactly: health
 reflects only the two in-container processes. Reusing Next.js's existing root response

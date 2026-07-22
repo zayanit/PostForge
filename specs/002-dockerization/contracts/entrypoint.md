@@ -13,12 +13,17 @@ the container's PID 1 (FR-003, FR-003a).
 
 ## Supervision loop (crash-restart behavior)
 
-- Block on `wait -n` for either background job to exit.
+- Block on `wait -n` for either background job to exit, capturing its exit status
+  explicitly (the script runs under `set -euo pipefail`, so the status must be captured
+  in a way that doesn't itself trip `set -e` — e.g. `wait -n; status=$?` inside an `if`/
+  guarded context, never a bare `wait -n` whose nonzero return would exit the entrypoint).
 - If a shutdown has been requested (see Shutdown below), exit the loop instead of
   restarting anything.
-- Otherwise, determine which of the two jobs exited (by PID), log that it exited
-  (exit code, which process — no environment variable values or secrets, per Security
-  Rules), and restart **only that process**, replacing its saved PID with the new one.
+- Otherwise, first determine **which** of the two saved PIDs is no longer running (e.g.
+  `kill -0 "$pid" 2>/dev/null`) — this PID lookup MUST happen before any restart decision,
+  since it's what identifies which process needs restarting. Log that it exited (exit
+  code, which process — no environment variable values or secrets, per Security Rules),
+  then restart **only that process**, replacing its saved PID with the new one.
 - The other process and the container itself are left untouched — this is the
   distinguishing behavior from "the container as a whole crashes and the host restarts
   it," which was explicitly rejected during spec clarification.

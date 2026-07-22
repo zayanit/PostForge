@@ -48,9 +48,9 @@ Infrastructure feature — adds root-level packaging artifacts, not a new `front
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
 - [ ] T005 Add a Next.js rewrite in `frontend/next.config.js` proxying `/api/:path*` to the internal backend address (`NEXT_SERVER_API_URL`, default `http://127.0.0.1:8000`), so browser requests to the same-origin `/api` path (per `frontend/.env.local.example`'s `NEXT_PUBLIC_API_URL=/api`) reach the backend through the single public port — required for FR-002/SC-002
-- [ ] T006 Author `Dockerfile` frontend build stage: pinned `node:20-slim` tag (specific patch version, not `latest`), `npm ci`, `npm run build`, in `Dockerfile`
-- [ ] T007 [P] Author `Dockerfile` backend dependency stage: pinned `python:3.11-slim` tag, `pip install --no-cache-dir -r backend/requirements.txt`, in `Dockerfile`
-- [ ] T008 Author `Dockerfile` runtime stage: pinned `python:3.11-slim` base, install Node.js 20.x and `tini` via apt, create a non-root user (e.g. `appuser`), copy the built frontend (`.next/`, `public/`, production `node_modules`) and backend app code + installed dependencies, set `WORKDIR`, end with `USER appuser` — in `Dockerfile` (depends on T006, T007)
+- [ ] T006 Author `Dockerfile` frontend build stage: `node:20-slim` pinned by immutable digest (`node:20-slim@sha256:<digest>`, not a bare tag), `npm ci`, `npm run build`, in `Dockerfile`
+- [ ] T007 [P] Author `Dockerfile` backend dependency stage: `python:3.11-slim` pinned by immutable digest (`python:3.11-slim@sha256:<digest>`), install from a generated hash-locked requirements file (`pip install --require-hashes -r <lockfile>`, per `research.md` Decision 1) rather than `backend/requirements.txt`'s ranges directly, in `Dockerfile`
+- [ ] T008 Author `Dockerfile` runtime stage: `python:3.11-slim` pinned by the same digest as T007, install Node.js 20.x and a version-pinned `tini` (e.g. `tini=<pinned-version>`) via apt, create a non-root user (e.g. `appuser`), copy the built frontend (`.next/`, `public/`, production `node_modules`) and backend app code + installed dependencies, set `WORKDIR`, end with `USER appuser` — in `Dockerfile` (depends on T006, T007)
 - [ ] T009 Implement `scripts/container-entrypoint.sh` per `contracts/entrypoint.md`: start the backend (`uvicorn app.main:app --host 127.0.0.1 --port 8000`) and frontend (`next start -p 3000`) as background jobs; run a supervision loop using `wait -n` to detect either process exiting and restart only that one; trap `SIGTERM`/`SIGINT` to set a shutdown flag and forward the signal to both children before exiting; never log environment variable values (depends on T008)
 - [ ] T010 Set `Dockerfile`'s `ENTRYPOINT ["tini", "--", "/scripts/container-entrypoint.sh"]` and `EXPOSE 3000` only — no backend port exposed — in `Dockerfile` (depends on T008, T009)
 
@@ -69,8 +69,8 @@ Infrastructure feature — adds root-level packaging artifacts, not a new `front
 - [ ] T011 [US1] Document and wire required runtime environment variables — backend (`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWT_SECRET`, `DATABASE_URL`) and frontend (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_API_URL`, `NEXT_SERVER_API_URL`) — confirming none have values baked into `Dockerfile` (only `ENV` declarations with no secret defaults, if any)
 - [ ] T012 [US1] Validate `quickstart.md` Scenario 1: build the image, run a container with required env vars supplied via `-e`, sign in / view / edit a profile through `http://localhost:3000`, stop the container, and confirm no orphaned processes remain (`docker ps`, `docker top`)
 - [ ] T013 [US1] Validate `quickstart.md` Scenario 2: confirm `curl http://localhost:8000/...` fails from outside the container and `docker port <container>` shows exactly one mapped port
-- [ ] T014 [US1] Validate `quickstart.md` Scenario 4: `docker history --no-trunc` on the built image shows zero secret values in any layer
-- [ ] T015 [US1] Validate `quickstart.md` Scenario 5: confirm the running container's process user is non-root via `docker run --rm <image> sh -c "whoami"`
+- [ ] T014 [US1] Validate `quickstart.md` Scenario 4: with a distinctive fake secret planted in a local `backend/.env` before building, confirm `docker history --no-trunc` shows zero secret values in any layer, AND the exported image filesystem (`docker export` + scan) shows zero secret values, then remove the local test env file
+- [ ] T015 [US1] Validate `quickstart.md` Scenario 5: confirm the running container's process user is non-root via `docker run --rm --entrypoint sh <image> -c "whoami && id -u"` (must override the image's `ENTRYPOINT`, not just append args to it)
 
 **Checkpoint**: User Story 1 is fully functional and independently testable — this is the deployable MVP
 
@@ -86,9 +86,9 @@ Infrastructure feature — adds root-level packaging artifacts, not a new `front
 
 - [ ] T016 [P] [US2] Add an unauthenticated `GET /health` route per `contracts/healthcheck.md` in `backend/app/routes/health.py` — minimal JSON response (e.g. `{"status": "ok"}`), no database or external-service calls
 - [ ] T017 [US2] Register the new health router in `backend/app/main.py` (depends on T016)
-- [ ] T018 [US2] Implement `scripts/container-healthcheck.sh` per `contracts/healthcheck.md`: `curl -f http://127.0.0.1:8000/health` and `curl -f http://127.0.0.1:3000/`, exit 0 only if both succeed, exit 1 otherwise — no Supabase or other external check
+- [ ] T018 [US2] Implement `scripts/container-healthcheck.sh` per `contracts/healthcheck.md`: check `http://127.0.0.1:8000/health` and `http://127.0.0.1:3000/` with redirects disabled (`--max-redirs 0`) and the HTTP status code explicitly verified as `2xx` (not just `curl -f`), exit 0 only if both are `2xx`, exit 1 otherwise — no Supabase or other external check
 - [ ] T019 [US2] Add a `HEALTHCHECK` instruction to `Dockerfile` invoking `scripts/container-healthcheck.sh`, with `--start-period` and `--interval` values consistent with SC-003 (healthy within 60s under normal conditions) (depends on T017, T018)
-- [ ] T020 [US2] Validate `quickstart.md` Scenario 3: confirm health reports healthy within 60s of start; kill the backend process inside the running container and confirm health flips to unhealthy then back to healthy without the container restarting (`docker inspect` `StartedAt` unchanged); repeat for the frontend process
+- [ ] T020 [US2] Validate `quickstart.md` Scenario 3: confirm health reports healthy within 60s of start; then, using a controlled outage (`kill -STOP` on the target process, not an outright `kill`, so the unhealthy transition is deterministic rather than racing an immediate restart) confirm health flips to unhealthy after 3 consecutive failed checks; resume and kill the process (`kill -CONT` then `kill`) to let the entrypoint restart it in place, and confirm health returns to healthy without the container restarting (`docker inspect` `StartedAt` unchanged throughout); repeat both steps for the frontend process
 
 **Checkpoint**: User Stories 1 AND 2 both work independently — the deployment is now observable
 

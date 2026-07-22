@@ -20,9 +20,10 @@ logic beyond adding the already-planned `GET /health` endpoint (defined in
 
 ## Technical Context
 
-**Language/Version**: Bash (POSIX-compatible, requires `wait -n`) for the container
-entrypoint/healthcheck scripts; existing Python 3.11 (FastAPI backend) and Node.js 20 LTS
-(Next.js 14 frontend) runtimes, unchanged by this feature
+**Language/Version**: Bash 4.3+ (required — `wait -n` is a bash-specific extension, not
+available in POSIX `sh`/`dash`) for the container entrypoint/healthcheck scripts; existing
+Python 3.11 (FastAPI backend) and Node.js 20 LTS (Next.js 14 frontend) runtimes, unchanged
+by this feature
 
 **Primary Dependencies**: Docker multi-stage build (`node:20-slim` build stage for the
 frontend, `python:3.11-slim` stage for backend dependencies, combined into one
