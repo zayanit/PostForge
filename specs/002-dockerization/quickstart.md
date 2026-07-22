@@ -87,8 +87,11 @@ docker run -d --name pf-health --platform linux/amd64 -p 3000:3000 \
   -e SUPABASE_URL=... \
   -e SUPABASE_SECRET_KEY=... \
   -e SUPABASE_JWT_SECRET=... \
+  -e DATABASE_URL=... \
   -e NEXT_PUBLIC_SUPABASE_URL=... \
   -e NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=... \
+  -e NEXT_PUBLIC_API_URL=/api \
+  -e NEXT_SERVER_API_URL=http://127.0.0.1:8000 \
   postforge:local
 
 deadline=$(( $(date +%s) + 60 ))
@@ -117,7 +120,7 @@ which can race with the healthcheck and make the unhealthy transition hard to ob
 deterministically. Instead, pause it in place first:
 
 ```bash
-docker exec pf-health sh -c "kill -STOP \$(pgrep -f uvicorn)"
+docker exec pf-health sh -c "kill -STOP \$(pgrep -f '[u]vicorn')"
 ```
 
 **Expected**: Because the paused process doesn't exit, the entrypoint does not restart it
@@ -126,7 +129,7 @@ consecutive failed checks (worst case approximately 45s at the configured interv
 the very next check). Now let it actually exit so the entrypoint's crash-restart takes over:
 
 ```bash
-docker exec pf-health sh -c "kill -CONT \$(pgrep -f uvicorn) && kill \$(pgrep -f uvicorn)"
+docker exec pf-health sh -c "kill -CONT \$(pgrep -f '[u]vicorn') && kill \$(pgrep -f '[u]vicorn')"
 ```
 
 **Expected**: Status returns to `healthy` shortly after (once the restarted process passes
@@ -134,7 +137,7 @@ its next check) — because the entrypoint restarted the killed backend process 
 (FR-003a), without the container itself restarting (`docker inspect --format=
 '{{.State.StartedAt}}' pf-health` is unchanged throughout the whole scenario).
 
-Repeat both steps against the frontend process (`pgrep -f "next start"`) instead — same
+Repeat both steps against the frontend process (`pgrep -f "[n]ext start"`) instead — same
 expected transitions.
 
 ```bash

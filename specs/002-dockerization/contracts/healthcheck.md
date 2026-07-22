@@ -13,7 +13,7 @@ addresses of the two in-container processes.
 ## Behavior
 
 1. `GET http://127.0.0.1:8000/health` (backend, new unauthenticated route)
-2. `GET http://127.0.0.1:3000/` (frontend root — no new route needed)
+2. `GET http://127.0.0.1:3000/login` (existing public frontend route — no new route needed)
 3. Each request is made with redirects disabled (`--max-redirs 0`), an explicit
    per-request `curl --max-time 2` (so the two sequential requests fit with margin inside
    the shared 5-second `HEALTHCHECK --timeout`, rather than each implicitly assuming the

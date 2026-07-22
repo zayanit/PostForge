@@ -93,8 +93,8 @@ policy, which is the one piece of behavior specific to this feature.
 
 **Decision**: A single `scripts/container-healthcheck.sh`, invoked by the Dockerfile's
 `HEALTHCHECK` instruction, does two local checks against `http://127.0.0.1:8000/health`
-(backend, new route) and `http://127.0.0.1:3000/` (frontend — Next.js's own root response
-is sufficient evidence of readiness; no new frontend route needed). Each check uses
+(backend, new route) and `http://127.0.0.1:3000/login` (frontend — the existing public
+login response is sufficient evidence of readiness; no new frontend route needed). Each check uses
 `curl --silent --show-error --max-redirs 0 --output /dev/null --write-out '%{http_code}'`
 and explicitly compares the returned code against the `2xx` range, rather than relying on
 `curl -f` alone: `-f` only fails on HTTP status >= 400, so without also capping redirects
@@ -115,7 +115,7 @@ Docker's `HEALTHCHECK` retry counter actually works, and has been corrected in t
 contract).
 
 **Rationale**: Matches FR-004 and the clarified healthcheck-depth decision exactly: health
-reflects only the two in-container processes. Reusing Next.js's existing root response
+reflects only the two in-container processes. Reusing Next.js's existing public login response
 avoids adding a redundant frontend-only health route; the backend needs one new `/health`
 route because none of its existing routes are unauthenticated (every other route requires
 a JWT, which a healthcheck script has no way to obtain).
