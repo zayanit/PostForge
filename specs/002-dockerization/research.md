@@ -10,8 +10,10 @@ decisions needed to satisfy those clarified requirements, not open unknowns abou
 **Decision**: Multi-stage build — a `node:20-slim` stage builds the Next.js frontend
 (`npm ci && npm run build`), a `python:3.11-slim` stage installs backend dependencies
 (`pip install -r requirements.txt`), and the final runtime stage is `python:3.11-slim`
-with Node.js 20 installed alongside it (to run `next start`), copying in the built
-frontend (`.next/`, `node_modules` production deps, `public/`) and the backend's
+with Node.js 20, `tini`, and `curl` installed alongside it (Node.js to run `next start`;
+`curl` because `python:3.11-slim` doesn't ship it by default, and
+`scripts/container-healthcheck.sh` requires it to probe both processes), copying in the
+built frontend (`.next/`, `node_modules` production deps, `public/`) and the backend's
 installed site-packages + app code.
 
 **Reproducibility policy (FR-009), stated explicitly per dependency source**:
@@ -25,10 +27,10 @@ installed site-packages + app code.
   (`pip-compile --generate-hashes` output, or equivalent) via
   `pip install --require-hashes -r <lockfile>`, so the exact resolved version and package
   hash are fixed, not just the range.
-- **`tini` and apt-installed packages**: installed with an explicit version pin
-  (e.g. `apt-get install -y --no-install-recommends tini=<pinned-version>`), not a bare
-  `apt-get install tini` that resolves to whatever the base image's package index currently
-  serves.
+- **`tini`, `curl`, and other apt-installed packages**: installed with an explicit version
+  pin (e.g. `apt-get install -y --no-install-recommends tini=<pinned-version>
+  curl=<pinned-version>`), not a bare `apt-get install tini curl` that resolves to
+  whatever the base image's package index currently serves.
 
 **Rationale**: The runtime stage must contain *both* a Node runtime (for `next start`)
 and a Python runtime (for `uvicorn`), since both processes run inside the same container
@@ -63,8 +65,11 @@ status trip `set -e` and kill the entrypoint. The loop then checks each saved PI
 `kill -0 "$pid" 2>/dev/null` to determine which one is no longer running — identifying the
 exited child *before* deciding to restart it — restarts only that one process, and
 replaces its saved PID with the new one. A `trap` on `SIGTERM`/`SIGINT` sets a
-shutting-down flag and forwards the signal to both children before exiting, so a
-deliberate container stop does not get mistaken for a crash and trigger a restart.
+shutting-down flag, forwards the signal to whichever child PIDs are currently assigned
+(only the ones started so far, if the signal arrives mid-startup before both are up),
+and waits for each of those to actually exit before the entrypoint itself exits — PID 1
+does not return until its tracked children are gone, so a deliberate container stop does
+not get mistaken for a crash and trigger a restart, and doesn't leave orphans either.
 
 **Rationale**: Directly implements the spec clarification (FR-003a): a crashed process is
 restarted individually, not by restarting the container. `tini` as PID 1 handles the
@@ -101,10 +106,12 @@ process answering with a real success status."
 
 **Docker `HEALTHCHECK` timing values**: `--interval=10s --timeout=5s --start-period=30s
 --retries=3`. These are the concrete numbers referenced by SC-003 and
-`contracts/healthcheck.md`: a container reports `unhealthy` only after 3 consecutive
-failed checks post-start-period (worst case ~30-35s after a process actually stops
-responding, not "within one check interval" — that phrasing undersold how Docker's
-`HEALTHCHECK` retry counter actually works, and has been corrected in the spec and
+`contracts/healthcheck.md`: any single successful check — including one during the
+30-second start period, not only after it elapses — immediately reports healthy. A
+container reports `unhealthy` only after 3 consecutive failed checks (worst case
+approximately 45s after a process actually stops responding: 3 checks, each up to the 5s
+timeout, spaced 10s apart), not "within one check interval" — that phrasing undersold how
+Docker's `HEALTHCHECK` retry counter actually works, and has been corrected in the spec and
 contract).
 
 **Rationale**: Matches FR-004 and the clarified healthcheck-depth decision exactly: health
