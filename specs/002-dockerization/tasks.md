@@ -66,11 +66,11 @@ Infrastructure feature — adds root-level packaging artifacts, not a new `front
 
 ### Implementation for User Story 1
 
-- [ ] T011 [US1] Document and wire required runtime environment variables — backend (`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWT_SECRET`, `DATABASE_URL`) and frontend (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_API_URL`, `NEXT_SERVER_API_URL`) — confirming none have values baked into `Dockerfile` (only `ENV` declarations with no secret defaults, if any)
-- [ ] T012 [US1] Validate `quickstart.md` Scenario 1: build the image, run a container with required env vars supplied via `-e`, sign in / view / edit a profile through `http://localhost:3000`, stop the container, and confirm no orphaned processes remain (`docker ps`, `docker top`)
-- [ ] T013 [US1] Validate `quickstart.md` Scenario 2: confirm `curl http://localhost:8000/...` fails from outside the container and `docker port <container>` shows exactly one mapped port
-- [ ] T014 [US1] Validate `quickstart.md` Scenario 4: with a distinctive fake secret planted in a local `backend/.env` before building, confirm `docker history --no-trunc` shows zero secret values in any layer, AND the exported image filesystem (`docker export` + scan) shows zero secret values, then remove the local test env file
-- [ ] T015 [US1] Validate `quickstart.md` Scenario 5: confirm the running container's process user is non-root via `docker run --rm --entrypoint sh <image> -c "whoami && id -u"` (must override the image's `ENTRYPOINT`, not just append args to it)
+- [X] T011 [US1] Document and wire required runtime environment variables — backend (`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWT_SECRET`, `DATABASE_URL`) and frontend (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_API_URL`, `NEXT_SERVER_API_URL`) — confirming none have values baked into `Dockerfile` (only `ENV` declarations with no secret defaults, if any)
+- [X] T012 [US1] Validate `quickstart.md` Scenario 1: build the image, run a container with required env vars supplied via `-e`, sign in / view / edit a profile through `http://localhost:3000`, stop the container, and confirm no orphaned processes remain (`docker ps`, `docker top`)
+- [X] T013 [US1] Validate `quickstart.md` Scenario 2: confirm `curl http://localhost:8000/...` fails from outside the container and `docker port <container>` shows exactly one mapped port
+- [X] T014 [US1] Validate `quickstart.md` Scenario 4: with a distinctive fake secret planted in a local `backend/.env` before building, confirm `docker history --no-trunc` shows zero secret values in any layer, AND the exported image filesystem (`docker export` + scan) shows zero secret values, then remove the local test env file
+- [X] T015 [US1] Validate `quickstart.md` Scenario 5: confirm the running container's process user is non-root via `docker run --rm --entrypoint sh <image> -c "whoami && id -u"` (must override the image's `ENTRYPOINT`, not just append args to it)
 
 **Checkpoint**: User Story 1 is fully functional and independently testable — this is the deployable MVP
 

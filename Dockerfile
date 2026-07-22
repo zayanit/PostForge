@@ -7,13 +7,6 @@ RUN npm ci
 
 COPY frontend/ ./
 
-# Next.js embeds NEXT_PUBLIC_* values in browser bundles at build time. These
-# defaults are non-secret placeholders; deployment-specific wiring is T011.
-ARG NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321
-ARG NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=build-placeholder
-ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL} \
-    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
-
 RUN npm run build \
     && npm prune --omit=dev
 

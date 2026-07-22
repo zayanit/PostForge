@@ -20,14 +20,23 @@ docker run --rm -p 3000:3000 \
   -e SUPABASE_URL=... \
   -e SUPABASE_SECRET_KEY=... \
   -e SUPABASE_JWT_SECRET=... \
+  -e DATABASE_URL=... \
   -e NEXT_PUBLIC_SUPABASE_URL=... \
   -e NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=... \
+  -e NEXT_PUBLIC_API_URL=/api \
+  -e NEXT_SERVER_API_URL=http://127.0.0.1:8000 \
   postforge:local
 ```
 
 (`--platform linux/amd64` matches the declared deployment target — see `plan.md` §
 Technical Context — and keeps the local build consistent with what's deployed even when
 building on a different host architecture, e.g. Apple Silicon.)
+
+All eight values are supplied when the container starts; none are build arguments or
+baked into the image. `NEXT_PUBLIC_*` values are public browser configuration, not
+secrets. For local Supabase, use hostnames reachable from each consumer: the browser URL
+is commonly `http://localhost:54321`, while backend connection URLs from Docker Desktop
+commonly use `host.docker.internal`.
 
 **Expected**: Build completes without error. Container starts; visiting
 `http://localhost:3000` in a browser reaches the app. Sign in, view, and edit a profile
@@ -46,15 +55,19 @@ docker run -d --name pf-noport --platform linux/amd64 -p 3000:3000 \
   -e SUPABASE_URL=... \
   -e SUPABASE_SECRET_KEY=... \
   -e SUPABASE_JWT_SECRET=... \
+  -e DATABASE_URL=... \
   -e NEXT_PUBLIC_SUPABASE_URL=... \
   -e NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=... \
+  -e NEXT_PUBLIC_API_URL=/api \
+  -e NEXT_SERVER_API_URL=http://127.0.0.1:8000 \
   postforge:local
 
 curl -sf http://localhost:8000/health && echo "FAIL: backend reachable" || echo "OK: backend not reachable"
 
 mapped_ports=$(docker port pf-noport)
-port_count=$(echo "$mapped_ports" | grep -c .)
-if [ "$port_count" -eq 1 ] && echo "$mapped_ports" | grep -q "^3000/tcp"; then
+mapped_container_ports=$(printf '%s\n' "$mapped_ports" | cut -d ' ' -f 1 | sort -u)
+port_count=$(printf '%s\n' "$mapped_container_ports" | grep -c .)
+if [ "$port_count" -eq 1 ] && [ "$mapped_container_ports" = "3000/tcp" ]; then
   echo "OK: exactly one mapped port (3000/tcp)"
 else
   echo "FAIL: expected exactly one 3000/tcp mapping, got:"
@@ -187,12 +200,12 @@ export_status=$?
 if [ "$export_status" -ne 0 ]; then
   echo "FAIL: docker export failed (exit $export_status)"
 else
-  extracted=$(tar -xO -f "$export_tar" 2>/dev/null)
+  tar -tf "$export_tar" >/dev/null
   tar_status=$?
   if [ "$tar_status" -ne 0 ]; then
-    echo "FAIL: tar extraction failed (exit $tar_status)"
+    echo "FAIL: exported filesystem is not a readable tar archive (exit $tar_status)"
   else
-    echo "$extracted" | grep -F -q "$QS_TEST_SECRET"
+    tar -xO -f "$export_tar" 2>/dev/null | grep -aF -q "$QS_TEST_SECRET"
     grep_status=$?
     if [ "$grep_status" -eq 0 ]; then
       echo "FAIL: secret value found in image filesystem"
