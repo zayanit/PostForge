@@ -5,6 +5,7 @@ Dockerfile*
 
 # Runtime configuration and secrets
 .env*
+**/.env*
 !*.example
 !**/*.example
 
