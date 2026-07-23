@@ -102,12 +102,12 @@ Infrastructure feature — adds root-level packaging artifacts, not a new `front
 
 ### Implementation for User Story 3
 
-- [ ] T021 [P] [US3] Write `docs/docker.md` § Build: exact `docker build` command and expected output
-- [ ] T022 [US3] Write `docs/docker.md` § Run Locally: exact `docker run` command with every required env var listed and explained, referencing FR-005 (secrets supplied at runtime only, never baked into the image)
-- [ ] T023 [US3] Write `docs/docker.md` § Healthcheck & Restart Behavior: what "healthy" means (process liveness only, no Supabase check) and how crash-restart works, referencing `contracts/healthcheck.md` and `contracts/entrypoint.md`
-- [ ] T024 [US3] Write `docs/docker.md` § Deploy to Bunny Magic Container: platform-specific deployment steps, including the single-port and runtime-configuration/secrets mechanism
-- [ ] T025 [US3] Write `docs/docker.md` § Troubleshooting: common failure modes (missing env var → unhealthy container, port conflicts, stale build cache)
-- [ ] T026 [US3] Validate `quickstart.md` Scenario 6: have someone unfamiliar with this feature follow `docs/docker.md` alone from a clean checkout and confirm they reach a running, healthy container
+- [X] T021 [P] [US3] Write `docs/docker.md` § Build: exact `docker build` command and expected output
+- [X] T022 [US3] Write `docs/docker.md` § Run Locally: exact `docker run` command with every required env var listed and explained, referencing FR-005 (secrets supplied at runtime only, never baked into the image)
+- [X] T023 [US3] Write `docs/docker.md` § Healthcheck & Restart Behavior: what "healthy" means (process liveness only, no Supabase check) and how crash-restart works, referencing `contracts/healthcheck.md` and `contracts/entrypoint.md`
+- [X] T024 [US3] Write `docs/docker.md` § Deploy to Bunny Magic Container: platform-specific deployment steps, including the single-port and runtime-configuration/secrets mechanism
+- [X] T025 [US3] Write `docs/docker.md` § Troubleshooting: common failure modes (missing env var → unhealthy container, port conflicts, stale build cache)
+- [X] T026 [US3] Validate `quickstart.md` Scenario 6: have someone unfamiliar with this feature follow `docs/docker.md` alone from a clean checkout and confirm they reach a running, healthy container
 
 **Checkpoint**: All user stories independently functional — feature complete
 
