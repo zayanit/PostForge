@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import load_settings
 from .routes.auth import router as auth_router
+from .routes.health import router as health_router
 from .routes.me import router as me_router
 
 
@@ -112,4 +113,5 @@ async def root() -> dict[str, str]:
 
 
 app.include_router(auth_router)
+app.include_router(health_router)
 app.include_router(me_router)
