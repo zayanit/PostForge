@@ -7,6 +7,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 
 import { supabase } from "@/lib/supabase/client";
+import { getPublicEnv } from "@/lib/runtime-env";
 
 const profileFormSchema = z
   .object({
@@ -49,7 +50,7 @@ export default function AccountPage() {
   const [email, setEmail] = useState<string>("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "/api";
+  const apiBase = getPublicEnv("NEXT_PUBLIC_API_URL");
 
   const {
     register,
