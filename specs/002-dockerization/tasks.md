@@ -117,9 +117,9 @@ Infrastructure feature — adds root-level packaging artifacts, not a new `front
 
 **Purpose**: Verification that spans all user stories
 
-- [ ] T027 [P] Run the full `quickstart.md` validation (all 6 scenarios) end-to-end after all stories are complete
-- [ ] T028 [P] Re-verify constitution Security Rules compliance: confirm `scripts/container-entrypoint.sh` and `scripts/container-healthcheck.sh` never log environment variable values
-- [ ] T029 Verify reproducible builds per FR-009: rebuild the image twice from the same commit and confirm identical base image digests (no floating tags picked up a newer version)
+- [X] T027 [P] Run the full `quickstart.md` validation (all 6 scenarios) end-to-end after all stories are complete
+- [X] T028 [P] Re-verify constitution Security Rules compliance: confirm `scripts/container-entrypoint.sh` and `scripts/container-healthcheck.sh` never log environment variable values
+- [X] T029 Verify reproducible builds per FR-009: rebuild the image twice from the same commit and confirm identical base image digests (no floating tags picked up a newer version)
 
 ---
 
