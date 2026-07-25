@@ -18,6 +18,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const apiBase = getPublicEnv("NEXT_PUBLIC_API_URL");
   const [brands, setBrands] = useState<Brand[]>([]);
   const [isLoadingBrands, setIsLoadingBrands] = useState(true);
+  const [brandsError, setBrandsError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -35,16 +36,20 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
         if (!response.ok) {
+          if (active) {
+            setBrandsError("Unable to load your brands.");
+          }
           return;
         }
 
         const body = (await response.json()) as { brands: Brand[] };
         if (active) {
           setBrands(body.brands);
+          setBrandsError(null);
         }
       } catch {
         if (active) {
-          setBrands([]);
+          setBrandsError("Unable to load your brands.");
         }
       } finally {
         if (active) {
@@ -90,6 +95,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           </nav>
           <label className="ml-auto flex items-center gap-2 text-sm">
             <span className="sr-only">Current brand</span>
+            {brandsError ? (
+              <span className="text-xs text-red-600">{brandsError}</span>
+            ) : null}
             <select
               className="max-w-48 rounded-md border bg-white px-3 py-2"
               value={selectedBrandId}
@@ -101,7 +109,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               }}
             >
               <option value="">
-                {isLoadingBrands ? "Loading brands..." : "Choose brand"}
+                {isLoadingBrands
+                  ? "Loading brands..."
+                  : brandsError
+                    ? "Brands unavailable"
+                    : "Choose brand"}
               </option>
               {brands.map((brand) => (
                 <option value={brand.id} key={brand.id}>
