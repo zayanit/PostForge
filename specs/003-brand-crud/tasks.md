@@ -47,9 +47,9 @@ acceptance scenarios run against — must exist before any story can be built or
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T001 [P] Create `supabase/migrations/00014_create_brands.sql`: `brands` table, `uq_brands_owner_name_ci` and `idx_brands_owner_created` indexes, `trg_brands_updated_at` trigger, `ENABLE`/`FORCE ROW LEVEL SECURITY` + the four owner-scoped RLS policies, **and** the `GRANT SELECT, INSERT, UPDATE, DELETE` to `authenticated`/`service_role` in the same migration (per `data-model.md` and `research.md` Decision 1 — do not split the grants into a follow-up migration the way `001-user-auth-profile` had to)
-- [ ] T002 [P] Create `supabase/migrations/00015_create_brand_assets_bucket.sql`: idempotent `insert into storage.buckets (id, name, public) values ('brand-assets', 'brand-assets', true) on conflict do nothing` (per `research.md` Decision 2)
-- [ ] T003 Apply migrations (`supabase migration up`) and verify the `brands` table and `brand-assets` bucket both exist (depends on T001, T002)
+- [X] T001 [P] Create `supabase/migrations/00014_create_brands.sql`: `brands` table, `uq_brands_owner_name_ci` and `idx_brands_owner_created` indexes, `trg_brands_updated_at` trigger, `ENABLE`/`FORCE ROW LEVEL SECURITY` + the four owner-scoped RLS policies, **and** the `GRANT SELECT, INSERT, UPDATE, DELETE` to `authenticated`/`service_role` in the same migration (per `data-model.md` and `research.md` Decision 1 — do not split the grants into a follow-up migration the way `001-user-auth-profile` had to)
+- [X] T002 [P] Create `supabase/migrations/00015_create_brand_assets_bucket.sql`: idempotent `insert into storage.buckets (id, name, public) values ('brand-assets', 'brand-assets', true) on conflict do nothing` (per `research.md` Decision 2)
+- [X] T003 Apply migrations (`supabase migration up`) and verify the `brands` table and `brand-assets` bucket both exist (depends on T001, T002)
 
 **Checkpoint**: DB schema and storage bucket ready — user story work can now begin
 
