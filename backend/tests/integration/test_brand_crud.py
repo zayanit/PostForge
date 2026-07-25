@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from uuid import uuid4
 
 import httpx
@@ -383,6 +384,62 @@ def test_delete_brands_with_and_without_logo_against_real_supabase():
                     json={"prefixes": [f"brands/{logo_brand_id}/logo.png"]},
                 )
                 assert cleanup_response.is_success
+            if user_id:
+                supabase_client.delete(
+                    f"{supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}",
+                    },
+                )
+
+
+def test_list_and_open_fifty_brands_within_target_time():
+    supabase_url = _required_env("SUPABASE_URL")
+    supabase_key = _required_env("SUPABASE_SECRET_KEY")
+    _required_env("SUPABASE_JWT_SECRET")
+    _required_env("DATABASE_URL")
+
+    from backend.app.main import app
+
+    user_id: str | None = None
+
+    with httpx.Client(timeout=30.0) as supabase_client:
+        try:
+            user_id, access_token = _signup_and_login(
+                supabase_client,
+                supabase_url,
+                supabase_key,
+                f"brand-scale-{uuid4().hex[:12]}@example.com",
+                "12345678",
+            )
+            headers = {"Authorization": f"Bearer {access_token}"}
+
+            with TestClient(app) as api_client:
+                brand_ids: list[str] = []
+                for index in range(50):
+                    create_response = api_client.post(
+                        "/api/v1/brands",
+                        headers=headers,
+                        json={"name": f"Scale Brand {index + 1:02d}"},
+                    )
+                    assert create_response.status_code == 201
+                    brand_ids.append(create_response.json()["id"])
+
+                started_at = time.perf_counter()
+                list_response = api_client.get("/api/v1/brands", headers=headers)
+                detail_response = api_client.get(
+                    f"/api/v1/brands/{brand_ids[24]}",
+                    headers=headers,
+                )
+                elapsed = time.perf_counter() - started_at
+
+            assert list_response.status_code == 200
+            assert len(list_response.json()["brands"]) == 50
+            assert detail_response.status_code == 200
+            assert detail_response.json()["id"] == brand_ids[24]
+            assert elapsed < 10
+        finally:
             if user_id:
                 supabase_client.delete(
                     f"{supabase_url}/auth/v1/admin/users/{user_id}",

@@ -148,9 +148,9 @@ attempt is refused
 
 **Purpose**: Verification that spans all user stories
 
-- [ ] T032 [P] Run the full `quickstart.md` validation (all 5 scenarios) end-to-end after all stories are complete — Scenario 1 step 5 specifically verifies SC-003 (list/open responsiveness at ~50 brands, not just trivial scale)
-- [ ] T033 [P] Re-verify constitution Security Rules compliance: confirm `backend/app/routes/brands.py`, `brand_store.py`, and `brand_storage.py` log only `request_id`/`event`/`brand_id` — never the Supabase secret key or full request bodies
-- [ ] T034 Verify constitution Principle VII (Definition of Done) for this feature: hard delete verified (DB row AND Storage asset removed), RLS tested (non-owner access blocked for every operation, not just read)
+- [X] T032 [P] Run the full `quickstart.md` validation (all 5 scenarios) end-to-end after all stories are complete — Scenario 1 step 5 specifically verifies SC-003 (list/open responsiveness at ~50 brands, not just trivial scale)
+- [X] T033 [P] Re-verify constitution Security Rules compliance: confirm `backend/app/routes/brands.py`, `brand_store.py`, and `brand_storage.py` log only `request_id`/`event`/`brand_id` — never the Supabase secret key or full request bodies
+- [X] T034 Verify constitution Principle VII (Definition of Done) for this feature: hard delete verified (DB row AND Storage asset removed), RLS tested (non-owner access blocked for every operation, not just read)
 
 ---
 
