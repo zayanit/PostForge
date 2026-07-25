@@ -37,7 +37,7 @@ version and update the Sync Impact Report at the top of the file.
 
 **Monorepo, three deployable pieces wired together at runtime, not build time:**
 
-- `frontend/` — Next.js 14 (App Router, TypeScript). Route groups: `(auth)` for
+- `frontend/` — Next.js 15 (App Router, TypeScript). Route groups: `(auth)` for
   signup/login/forgot-password/reset-password, `(dashboard)` for the authenticated
   app (currently just `/` and `/account`). `middleware.ts` guards `/` and `/account*`
   server-side via Supabase session cookies — route groups don't add URL segments, so
@@ -131,7 +131,7 @@ Full behavioral contracts: `specs/002-dockerization/contracts/entrypoint.md` and
 npm run dev     # local dev server
 npm run build   # production build
 npm run start   # run a production build
-npm run lint    # next lint
+npm run lint    # eslint . via flat config (eslint.config.mjs) — next lint is deprecated/removed as of Next 15/16
 npx tsc --noEmit                 # type-check without emitting
 npx playwright test              # e2e tests (frontend/tests/e2e/) — needs the app + Supabase running
 ```
@@ -175,3 +175,9 @@ own restart and makes the unhealthy transition non-deterministic to observe).
   (`backend/app/models/profile.py`) and the Postgres `CHECK` constraint in the
   migration — a validator that's looser than the DB constraint lets requests pass
   Pydantic and then fail at the DB layer.
+- `cookies()` from `next/headers` is async as of Next 15 — always `await cookies()`;
+  a sync call breaks `tsc`/build (it broke the build once already in this repo).
+- Dependabot alerts on `postcss`/similar can point at a copy Next.js bundles
+  internally with its own hard-pinned version, unaffected by bumping Next or your
+  own top-level dependency — fix via an `overrides` entry in `frontend/package.json`
+  (use `"$pkgName"` self-reference syntax to track your own declared version).
