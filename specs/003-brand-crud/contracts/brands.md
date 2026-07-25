@@ -41,7 +41,7 @@ Create a brand (FR-001).
 
 **Errors**:
 - `400 VALIDATION_ERROR` — name missing, empty after trim, or outside 2–120 chars (FR-002).
-- `409 BRAND_NAME_TAKEN` — case-insensitive duplicate of an existing brand owned by this user (FR-003).
+- `409 BRAND_NAME_TAKEN` — case-insensitive, whitespace-insensitive duplicate of an existing brand owned by this user (FR-003). The server trims the name before persisting it and before the duplicate comparison — `" Acme "` and `"Acme"` are the same brand, both for uniqueness and for the value actually stored (see `data-model.md`'s `trg_brands_trim_name`).
 
 ## `GET /api/v1/brands/{id}`
 
@@ -92,7 +92,12 @@ Upload or replace a brand's logo (FR-008, FR-010).
 
 **Errors**:
 - `404 BRAND_NOT_FOUND` — same opacity rule.
-- `400 UNSUPPORTED_MEDIA_TYPE` — not PNG/JPEG/WebP (FR-011).
+- `400 UNSUPPORTED_MEDIA_TYPE` — not PNG/JPEG/WebP (FR-011). The server verifies
+  this against the actual uploaded bytes' magic-byte signature, not just the
+  client-supplied `Content-Type` header — a corrupted file or a non-image payload
+  sent with a spoofed `image/png`-style header is rejected the same way a genuinely
+  wrong file type is. No object is written to Storage unless the signature check
+  passes.
 - `413 FILE_TOO_LARGE` — exceeds 5 MB (FR-011, per spec Clarifications).
 
 ## `DELETE /api/v1/brands/{id}/logo`
