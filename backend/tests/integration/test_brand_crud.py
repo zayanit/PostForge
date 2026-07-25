@@ -284,3 +284,110 @@ def test_create_brand_against_real_supabase():
                         "Authorization": f"Bearer {supabase_key}",
                     },
                 )
+
+
+def test_delete_brands_with_and_without_logo_against_real_supabase():
+    supabase_url = _required_env("SUPABASE_URL")
+    supabase_key = _required_env("SUPABASE_SECRET_KEY")
+    _required_env("SUPABASE_JWT_SECRET")
+    _required_env("DATABASE_URL")
+
+    from backend.app.main import app
+
+    user_id: str | None = None
+    logo_brand_id: str | None = None
+    logo_url: str | None = None
+
+    with httpx.Client(timeout=30.0) as supabase_client:
+        try:
+            user_id, access_token = _signup_and_login(
+                supabase_client,
+                supabase_url,
+                supabase_key,
+                f"brand-delete-{uuid4().hex[:12]}@example.com",
+                "12345678",
+            )
+            headers = {"Authorization": f"Bearer {access_token}"}
+
+            with TestClient(app) as api_client:
+                logo_brand_response = api_client.post(
+                    "/api/v1/brands",
+                    headers=headers,
+                    json={"name": "Logo Brand"},
+                )
+                plain_brand_response = api_client.post(
+                    "/api/v1/brands",
+                    headers=headers,
+                    json={"name": "Plain Brand"},
+                )
+                assert logo_brand_response.status_code == 201
+                assert plain_brand_response.status_code == 201
+                logo_brand_id = logo_brand_response.json()["id"]
+                plain_brand_id = plain_brand_response.json()["id"]
+
+                upload_response = api_client.post(
+                    f"/api/v1/brands/{logo_brand_id}/logo",
+                    headers=headers,
+                    files={"file": ("logo.png", PNG_A, "image/png")},
+                )
+                assert upload_response.status_code == 200
+                logo_url = upload_response.json()["logo_url"]
+                assert supabase_client.get(logo_url).status_code == 200
+
+                delete_logo_brand_response = api_client.request(
+                    "DELETE",
+                    f"/api/v1/brands/{logo_brand_id}",
+                    headers=headers,
+                    json={"confirm_name": "Logo Brand"},
+                )
+                delete_plain_brand_response = api_client.request(
+                    "DELETE",
+                    f"/api/v1/brands/{plain_brand_id}",
+                    headers=headers,
+                    json={"confirm_name": "Plain Brand"},
+                )
+                assert delete_logo_brand_response.status_code == 204
+                assert delete_plain_brand_response.status_code == 204
+                assert api_client.get(
+                    f"/api/v1/brands/{logo_brand_id}", headers=headers
+                ).status_code == 404
+                assert api_client.get(
+                    f"/api/v1/brands/{plain_brand_id}", headers=headers
+                ).status_code == 404
+
+            persisted_response = supabase_client.get(
+                f"{supabase_url}/rest/v1/brands",
+                params={"select": "id", "owner_user_id": f"eq.{user_id}"},
+                headers={
+                    "apikey": supabase_key,
+                    "Authorization": f"Bearer {supabase_key}",
+                },
+            )
+            assert persisted_response.status_code == 200
+            assert persisted_response.json() == []
+            assert logo_url is not None
+            assert supabase_client.get(
+                logo_url,
+                params={"v": uuid4().hex},
+            ).status_code in {400, 404}
+        finally:
+            if logo_brand_id:
+                cleanup_response = supabase_client.request(
+                    "DELETE",
+                    f"{supabase_url}/storage/v1/object/brand-assets",
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"prefixes": [f"brands/{logo_brand_id}/logo.png"]},
+                )
+                assert cleanup_response.is_success
+            if user_id:
+                supabase_client.delete(
+                    f"{supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}",
+                    },
+                )

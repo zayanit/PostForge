@@ -131,6 +131,22 @@ class BrandStore:
             raise LookupError("Brand not found.")
         return self._to_brand(row)
 
+    def delete_brand(self, user_id: str, brand_id: UUID) -> None:
+        with self.engine.begin() as connection:
+            deleted_id = connection.execute(
+                text(
+                    """
+                    DELETE FROM brands
+                    WHERE id = :brand_id AND owner_user_id = :owner_user_id
+                    RETURNING id
+                    """
+                ),
+                {"brand_id": brand_id, "owner_user_id": user_id},
+            ).scalar_one_or_none()
+
+        if deleted_id is None:
+            raise LookupError("Brand not found.")
+
 
 @lru_cache(maxsize=1)
 def get_brand_store() -> BrandStore:

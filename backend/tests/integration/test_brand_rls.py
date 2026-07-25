@@ -143,6 +143,12 @@ def test_brand_reads_are_owner_scoped_at_api_and_database_layers():
                     f"/api/v1/brands/{brand_id}/logo",
                     headers={"Authorization": f"Bearer {token_b}"},
                 )
+                non_owner_brand_delete_response = api_client.request(
+                    "DELETE",
+                    f"/api/v1/brands/{brand_id}",
+                    headers={"Authorization": f"Bearer {token_b}"},
+                    json={"confirm_name": "Owner A Brand"},
+                )
                 owner_reread_response = api_client.get(
                     f"/api/v1/brands/{brand_id}",
                     headers={"Authorization": f"Bearer {token_a}"},
@@ -159,6 +165,7 @@ def test_brand_reads_are_owner_scoped_at_api_and_database_layers():
                 non_owner_upload_response,
                 malformed_non_owner_response,
                 non_owner_delete_response,
+                non_owner_brand_delete_response,
             ):
                 assert response.status_code == 404
                 assert response.json()["error"]["code"] == "BRAND_NOT_FOUND"

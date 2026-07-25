@@ -19,6 +19,7 @@ class FakeBrandStore:
     names: set[str] = field(default_factory=set)
     brands: list[Brand] = field(default_factory=list)
     logo_paths: dict[UUID, str | None] = field(default_factory=dict)
+    owners: dict[UUID, str] = field(default_factory=dict)
 
     def create_brand(self, user_id: str, payload: BrandCreate) -> Brand:
         normalized_name = payload.name.casefold()
@@ -33,6 +34,7 @@ class FakeBrandStore:
             created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
         )
         self.brands.insert(0, brand)
+        self.owners[brand.id] = user_id
         return brand
 
     def list_brands(self, user_id: str) -> list[Brand]:
@@ -40,7 +42,7 @@ class FakeBrandStore:
 
     def get_brand(self, user_id: str, brand_id: UUID) -> Brand:
         for brand in self.brands:
-            if brand.id == brand_id:
+            if brand.id == brand_id and self.owners.get(brand.id, user_id) == user_id:
                 return brand
         raise LookupError("Brand not found.")
 
@@ -64,6 +66,12 @@ class FakeBrandStore:
         updated_brand = brand.model_copy(update={"logo_url": logo_url})
         self.brands = [updated_brand if item.id == brand_id else item for item in self.brands]
         return updated_brand
+
+    def delete_brand(self, user_id: str, brand_id: UUID) -> None:
+        self.get_brand(user_id, brand_id)
+        self.brands = [brand for brand in self.brands if brand.id != brand_id]
+        self.logo_paths.pop(brand_id, None)
+        self.owners.pop(brand_id, None)
 
 
 @dataclass
@@ -377,5 +385,120 @@ def test_delete_logo_without_existing_logo_is_idempotent():
         assert response.content == b""
         assert storage.deletes == []
         assert store.logo_paths.get(brand.id) is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_delete_brand_with_exact_confirmation_removes_brand_and_logo():
+    brand = Brand(
+        id=UUID("22222222-2222-2222-2222-222222222222"),
+        name="Acme Coffee",
+        logo_url="https://example.supabase.co/logo.png",
+        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+    )
+    logo_path = f"brands/{brand.id}/logo.png"
+    store = FakeBrandStore(brands=[brand], logo_paths={brand.id: logo_path})
+    storage = FakeBrandStorage()
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="11111111-1111-1111-1111-111111111111",
+        email="owner@example.com",
+        access_token="eyJ...",
+    )
+    app.dependency_overrides[get_brand_store] = lambda: store
+    app.dependency_overrides[get_brand_storage] = lambda: storage
+
+    try:
+        with TestClient(app) as client:
+            response = client.request(
+                "DELETE",
+                f"/api/v1/brands/{brand.id}",
+                json={"confirm_name": brand.name},
+            )
+
+        assert response.status_code == 204
+        assert response.content == b""
+        assert store.brands == []
+        assert storage.deletes == [logo_path]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("payload", [{}, {"confirm_name": "acme coffee"}])
+def test_delete_brand_rejects_missing_or_wrong_confirmation_without_mutation(
+    payload: dict[str, str],
+):
+    brand = Brand(
+        id=UUID("22222222-2222-2222-2222-222222222222"),
+        name="Acme Coffee",
+        logo_url=None,
+        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+    )
+    store = FakeBrandStore(brands=[brand])
+    storage = FakeBrandStorage()
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="11111111-1111-1111-1111-111111111111",
+        email="owner@example.com",
+        access_token="eyJ...",
+    )
+    app.dependency_overrides[get_brand_store] = lambda: store
+    app.dependency_overrides[get_brand_storage] = lambda: storage
+
+    try:
+        with TestClient(app) as client:
+            response = client.request(
+                "DELETE",
+                f"/api/v1/brands/{brand.id}",
+                json=payload,
+            )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "CONFIRMATION_MISMATCH"
+        assert store.brands == [brand]
+        assert storage.deletes == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_delete_brand_returns_opaque_not_found_for_non_owner_and_nonexistent_brand():
+    owner_id = "11111111-1111-1111-1111-111111111111"
+    brand = Brand(
+        id=UUID("22222222-2222-2222-2222-222222222222"),
+        name="Another Owner Brand",
+        logo_url=None,
+        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+    )
+    store = FakeBrandStore(
+        brands=[brand],
+        owners={brand.id: "99999999-9999-9999-9999-999999999999"},
+    )
+    storage = FakeBrandStorage()
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=owner_id,
+        email="owner@example.com",
+        access_token="eyJ...",
+    )
+    app.dependency_overrides[get_brand_store] = lambda: store
+    app.dependency_overrides[get_brand_storage] = lambda: storage
+
+    try:
+        with TestClient(app) as client:
+            non_owner_response = client.request(
+                "DELETE",
+                f"/api/v1/brands/{brand.id}",
+                json={"confirm_name": brand.name},
+            )
+            nonexistent_response = client.request(
+                "DELETE",
+                "/api/v1/brands/44444444-4444-4444-4444-444444444444",
+                json={"confirm_name": brand.name},
+            )
+
+        assert non_owner_response.status_code == nonexistent_response.status_code == 404
+        for response in (non_owner_response, nonexistent_response):
+            error = response.json()["error"]
+            assert error["code"] == "BRAND_NOT_FOUND"
+            assert error["message"] == "Brand not found."
+        assert store.brands == [brand]
+        assert storage.deletes == []
     finally:
         app.dependency_overrides.clear()

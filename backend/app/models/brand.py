@@ -18,6 +18,10 @@ class BrandCreate(BaseModel):
         return normalized
 
 
+class BrandDelete(BaseModel):
+    confirm_name: str | None = None
+
+
 class Brand(BaseModel):
     id: UUID
     name: str

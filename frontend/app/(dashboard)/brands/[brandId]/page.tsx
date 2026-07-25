@@ -35,6 +35,9 @@ export default function BrandDetailPage() {
   const [logoError, setLogoError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [confirmationName, setConfirmationName] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [logoRevision, setLogoRevision] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -202,6 +205,50 @@ export default function BrandDetailPage() {
     }
   }
 
+  async function deleteBrand(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (confirmationName !== brand?.name) {
+      setDeleteError("Type the brand name exactly to confirm deletion.");
+      return;
+    }
+
+    setDeleteError(null);
+    setIsDeleting(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const session = data.session;
+      if (!session) {
+        router.push("/login");
+        return;
+      }
+
+      const response = await fetch(
+        `${apiBase}/v1/brands/${encodeURIComponent(brandId)}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ confirm_name: confirmationName }),
+        }
+      );
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        setDeleteError(body?.error?.message ?? "Unable to delete the brand.");
+        return;
+      }
+
+      window.dispatchEvent(new Event("postforge:brands-changed"));
+      router.push("/brands");
+      router.refresh();
+    } catch {
+      setDeleteError("Unable to delete the brand.");
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   if (isLoading) {
     return (
       <p className="mx-auto max-w-3xl text-sm text-gray-600">
@@ -284,7 +331,7 @@ export default function BrandDetailPage() {
               className="block w-full text-sm file:mr-4 file:rounded-md file:border file:bg-white file:px-3 file:py-2 file:text-sm"
               type="file"
               accept="image/png,image/jpeg,image/webp"
-              disabled={isUploading || isRemoving}
+              disabled={isUploading || isRemoving || isDeleting}
               onChange={selectLogo}
             />
             {logoError ? (
@@ -296,7 +343,7 @@ export default function BrandDetailPage() {
               <button
                 className="rounded-md bg-black px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
                 type="submit"
-                disabled={!selectedFile || isUploading || isRemoving}
+                disabled={!selectedFile || isUploading || isRemoving || isDeleting}
               >
                 {isUploading
                   ? "Uploading..."
@@ -308,7 +355,7 @@ export default function BrandDetailPage() {
                 <button
                   className="rounded-md border px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                   type="button"
-                  disabled={isUploading || isRemoving}
+                  disabled={isUploading || isRemoving || isDeleting}
                   onClick={removeLogo}
                 >
                   {isRemoving ? "Removing..." : "Remove logo"}
@@ -317,6 +364,48 @@ export default function BrandDetailPage() {
             </div>
           </form>
         </div>
+      </div>
+
+      <div className="rounded-2xl border border-red-200 bg-red-50/40 p-8">
+        <h2 className="text-lg font-semibold text-red-900">Delete brand</h2>
+        <p className="mt-1 text-sm text-red-800">
+          This permanently deletes the brand and its logo. This action cannot be
+          undone.
+        </p>
+
+        <form className="mt-6 space-y-4" onSubmit={deleteBrand}>
+          <label className="block text-sm font-medium text-red-950">
+            Type <span className="font-semibold">{brand.name}</span> to confirm
+            <input
+              className="mt-2 block w-full rounded-md border border-red-300 bg-white px-3 py-2 text-sm text-gray-950 outline-none focus:border-red-600"
+              type="text"
+              value={confirmationName}
+              disabled={isDeleting || isUploading || isRemoving}
+              autoComplete="off"
+              onChange={(event) => {
+                setConfirmationName(event.target.value);
+                setDeleteError(null);
+              }}
+            />
+          </label>
+          {deleteError ? (
+            <p className="text-sm text-red-700" role="alert">
+              {deleteError}
+            </p>
+          ) : null}
+          <button
+            className="rounded-md bg-red-700 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            type="submit"
+            disabled={
+              confirmationName !== brand.name ||
+              isDeleting ||
+              isUploading ||
+              isRemoving
+            }
+          >
+            {isDeleting ? "Deleting..." : "Delete brand permanently"}
+          </button>
+        </form>
       </div>
     </section>
   );

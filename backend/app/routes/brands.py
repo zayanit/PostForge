@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 
 from ..auth import CurrentUserDep
-from ..models.brand import Brand, BrandCreate, BrandListResponse
+from ..models.brand import Brand, BrandCreate, BrandDelete, BrandListResponse
 from ..services.brand_storage import (
     BrandStorage,
     BrandStorageError,
@@ -44,6 +44,16 @@ def _not_found() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={"code": "BRAND_NOT_FOUND", "message": "Brand not found."},
+    )
+
+
+def _confirmation_mismatch() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "CONFIRMATION_MISMATCH",
+            "message": "The confirmation name does not match the brand name.",
+        },
     )
 
 
@@ -146,6 +156,55 @@ def create_brand(
         },
     )
     return brand
+
+
+@router.delete("/{brand_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_brand(
+    request: Request,
+    brand_id: UUID,
+    current_user: CurrentUserDep,
+    brand_store: BrandStoreDep,
+    brand_storage: BrandStorageDep,
+    payload: BrandDelete | None = None,
+) -> Response:
+    try:
+        brand = brand_store.get_brand(current_user.user_id, brand_id)
+    except LookupError as exc:
+        raise _not_found() from exc
+
+    if payload is None or payload.confirm_name != brand.name:
+        raise _confirmation_mismatch()
+
+    try:
+        logo_path = brand_store.get_logo_path(current_user.user_id, brand_id)
+    except LookupError as exc:
+        raise _not_found() from exc
+
+    if logo_path:
+        try:
+            await brand_storage.delete_logo(logo_path)
+        except BrandStorageError:
+            logger.warning(
+                "brands.delete_logo_cleanup_failed",
+                extra={
+                    "event": "brands.delete_logo_cleanup_failed",
+                    "request_id": getattr(request.state, "request_id", "unknown"),
+                },
+            )
+
+    try:
+        brand_store.delete_brand(current_user.user_id, brand_id)
+    except LookupError as exc:
+        raise _not_found() from exc
+
+    logger.info(
+        "brands.delete_success",
+        extra={
+            "event": "brands.delete_success",
+            "request_id": getattr(request.state, "request_id", "unknown"),
+        },
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{brand_id}/logo", response_model=Brand)
