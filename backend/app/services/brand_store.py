@@ -87,6 +87,50 @@ class BrandStore:
 
         return self._to_brand(row)
 
+    def get_logo_path(self, user_id: str, brand_id: UUID) -> str | None:
+        with self.engine.connect() as connection:
+            logo_path = connection.execute(
+                text(
+                    """
+                    SELECT logo_path
+                    FROM brands
+                    WHERE id = :brand_id AND owner_user_id = :owner_user_id
+                    """
+                ),
+                {"brand_id": brand_id, "owner_user_id": user_id},
+            ).scalar_one_or_none()
+
+        if logo_path is None:
+            self.get_brand(user_id, brand_id)
+        return logo_path
+
+    def update_logo_path(
+        self,
+        user_id: str,
+        brand_id: UUID,
+        logo_path: str | None,
+    ) -> Brand:
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    UPDATE brands
+                    SET logo_path = :logo_path
+                    WHERE id = :brand_id AND owner_user_id = :owner_user_id
+                    RETURNING id, name, logo_path, created_at
+                    """
+                ),
+                {
+                    "brand_id": brand_id,
+                    "owner_user_id": user_id,
+                    "logo_path": logo_path,
+                },
+            ).mappings().one_or_none()
+
+        if row is None:
+            raise LookupError("Brand not found.")
+        return self._to_brand(row)
+
 
 @lru_cache(maxsize=1)
 def get_brand_store() -> BrandStore:

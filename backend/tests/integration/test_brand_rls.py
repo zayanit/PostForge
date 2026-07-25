@@ -12,6 +12,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
+PNG = b"\x89PNG\r\n\x1a\nowner-a-logo"
+
+
 def _required_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
@@ -73,6 +76,7 @@ def test_brand_reads_are_owner_scoped_at_api_and_database_layers():
     password = "12345678"
     user_a_id: str | None = None
     user_b_id: str | None = None
+    brand_id: str | None = None
 
     with httpx.Client(timeout=30.0) as supabase_client:
         try:
@@ -99,6 +103,13 @@ def test_brand_reads_are_owner_scoped_at_api_and_database_layers():
                 )
                 assert create_response.status_code == 201
                 brand_id = create_response.json()["id"]
+                owner_upload_response = api_client.post(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                    files={"file": ("logo.png", PNG, "image/png")},
+                )
+                assert owner_upload_response.status_code == 200
+                logo_url = owner_upload_response.json()["logo_url"]
 
                 owner_response = api_client.get(
                     f"/api/v1/brands/{brand_id}",
@@ -112,6 +123,30 @@ def test_brand_reads_are_owner_scoped_at_api_and_database_layers():
                     f"/api/v1/brands/{uuid4()}",
                     headers={"Authorization": f"Bearer {token_b}"},
                 )
+                non_owner_upload_response = api_client.post(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers={"Authorization": f"Bearer {token_b}"},
+                    files={
+                        "file": (
+                            "logo.jpg",
+                            b"\xff\xd8\xffnon-owner",
+                            "image/jpeg",
+                        )
+                    },
+                )
+                malformed_non_owner_response = api_client.post(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers={"Authorization": f"Bearer {token_b}"},
+                    files={"file": ("logo.png", b"not a png", "image/png")},
+                )
+                non_owner_delete_response = api_client.delete(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers={"Authorization": f"Bearer {token_b}"},
+                )
+                owner_reread_response = api_client.get(
+                    f"/api/v1/brands/{brand_id}",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                )
 
             assert owner_response.status_code == 200
             assert non_owner_response.status_code == 404
@@ -120,11 +155,50 @@ def test_brand_reads_are_owner_scoped_at_api_and_database_layers():
             assert nonexistent_response.json()["error"]["code"] == "BRAND_NOT_FOUND"
             assert non_owner_response.json()["error"]["message"] == "Brand not found."
             assert nonexistent_response.json()["error"]["message"] == "Brand not found."
+            for response in (
+                non_owner_upload_response,
+                malformed_non_owner_response,
+                non_owner_delete_response,
+            ):
+                assert response.status_code == 404
+                assert response.json()["error"]["code"] == "BRAND_NOT_FOUND"
+                assert response.json()["error"]["message"] == "Brand not found."
+
+            assert owner_reread_response.status_code == 200
+            assert owner_reread_response.json()["logo_url"] == logo_url
+            stored_logo = supabase_client.get(
+                logo_url,
+                params={"v": uuid4().hex},
+            )
+            assert stored_logo.status_code == 200
+            assert stored_logo.content == PNG
+            alternate_logo_url = logo_url.removesuffix("logo.png") + "logo.jpg"
+            assert supabase_client.get(
+                alternate_logo_url,
+                params={"v": uuid4().hex},
+            ).status_code in {400, 404}
 
             engine = get_engine()
             assert _visible_brand_ids(engine, token_a, brand_id) == [brand_id]
             assert _visible_brand_ids(engine, token_b, brand_id) == []
         finally:
+            if brand_id:
+                cleanup_response = supabase_client.request(
+                    "DELETE",
+                    f"{supabase_url}/storage/v1/object/brand-assets",
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "prefixes": [
+                            f"brands/{brand_id}/logo.png",
+                            f"brands/{brand_id}/logo.jpg",
+                        ]
+                    },
+                )
+                assert cleanup_response.is_success
             for user_id in (user_a_id, user_b_id):
                 if user_id:
                     supabase_client.delete(

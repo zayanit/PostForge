@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import base64
 import os
 from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+
+
+PNG_A = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+PNG_B = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2n0YAAAAASUVORK5CYII="
+)
+JPEG = b"\xff\xd8\xff\xe0" + b"postforge-jpeg-fixture" + b"\xff\xd9"
 
 
 def _required_env(name: str) -> str:
@@ -50,6 +60,7 @@ def test_create_brand_against_real_supabase():
     email = f"brand-create-{uuid4().hex[:12]}@example.com"
     password = "12345678"
     user_id: str | None = None
+    brand_id: str | None = None
 
     with httpx.Client(timeout=30.0) as supabase_client:
         try:
@@ -74,6 +85,7 @@ def test_create_brand_against_real_supabase():
                 )
                 assert create_response.status_code == 201
                 created_brand = create_response.json()
+                brand_id = created_brand["id"]
                 single_list_response = api_client.get(
                     "/api/v1/brands",
                     headers=headers,
@@ -106,6 +118,105 @@ def test_create_brand_against_real_supabase():
                     headers=headers,
                     json={"name": "A" * 121},
                 )
+                png_upload_response = api_client.post(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers=headers,
+                    files={"file": ("logo.png", PNG_A, "image/png")},
+                )
+
+                assert png_upload_response.status_code == 200
+                png_url = png_upload_response.json()["logo_url"]
+                assert png_url
+                stored_png = supabase_client.get(
+                    png_url,
+                    params={"v": uuid4().hex},
+                )
+                assert stored_png.status_code == 200
+                assert stored_png.content == PNG_A
+
+                same_format_response = api_client.post(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers=headers,
+                    files={"file": ("logo.png", PNG_B, "image/png")},
+                )
+                assert same_format_response.status_code == 200
+                assert same_format_response.json()["logo_url"] == png_url
+                replaced_png = supabase_client.get(
+                    png_url,
+                    params={"v": uuid4().hex},
+                )
+                assert replaced_png.status_code == 200
+                assert replaced_png.content == PNG_B
+
+                different_format_response = api_client.post(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers=headers,
+                    files={"file": ("logo.jpg", JPEG, "image/jpeg")},
+                )
+                assert different_format_response.status_code == 200
+                jpeg_url = different_format_response.json()["logo_url"]
+                assert jpeg_url and jpeg_url != png_url
+                stored_jpeg = supabase_client.get(
+                    jpeg_url,
+                    params={"v": uuid4().hex},
+                )
+                assert stored_jpeg.status_code == 200
+                assert stored_jpeg.content == JPEG
+                assert supabase_client.get(
+                    png_url,
+                    params={"v": uuid4().hex},
+                ).status_code in {400, 404}
+
+                unsupported_response = api_client.post(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers=headers,
+                    files={"file": ("logo.txt", b"text", "text/plain")},
+                )
+                spoofed_response = api_client.post(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers=headers,
+                    files={"file": ("logo.png", b"not a png", "image/png")},
+                )
+                oversized_response = api_client.post(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers=headers,
+                    files={
+                        "file": (
+                            "logo.png",
+                            b"\x89PNG\r\n\x1a\n" + b"x" * (5 * 1024 * 1024),
+                            "image/png",
+                        )
+                    },
+                )
+
+                assert unsupported_response.status_code == 400
+                assert spoofed_response.status_code == 400
+                assert oversized_response.status_code == 413
+                unchanged_jpeg = supabase_client.get(
+                    jpeg_url,
+                    params={"v": uuid4().hex},
+                )
+                assert unchanged_jpeg.status_code == 200
+                assert unchanged_jpeg.content == JPEG
+                assert supabase_client.get(
+                    png_url,
+                    params={"v": uuid4().hex},
+                ).status_code in {400, 404}
+
+                remove_response = api_client.delete(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers=headers,
+                )
+                repeat_remove_response = api_client.delete(
+                    f"/api/v1/brands/{brand_id}/logo",
+                    headers=headers,
+                )
+                assert remove_response.status_code == 204
+                assert repeat_remove_response.status_code == 204
+                assert supabase_client.get(
+                    jpeg_url,
+                    params={"v": uuid4().hex},
+                ).status_code in {400, 404}
 
             assert empty_list_response.status_code == 200
             assert empty_list_response.json() == {"brands": []}
@@ -147,6 +258,24 @@ def test_create_brand_against_real_supabase():
                 (user_id, "Beta Bakery"),
             }
         finally:
+            if brand_id:
+                cleanup_response = supabase_client.request(
+                    "DELETE",
+                    f"{supabase_url}/storage/v1/object/brand-assets",
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "prefixes": [
+                            f"brands/{brand_id}/logo.png",
+                            f"brands/{brand_id}/logo.jpg",
+                            f"brands/{brand_id}/logo.webp",
+                        ]
+                    },
+                )
+                assert cleanup_response.is_success
             if user_id:
                 supabase_client.delete(
                     f"{supabase_url}/auth/v1/admin/users/{user_id}",
