@@ -13,10 +13,23 @@ CREATE TABLE brands (
 );
 
 CREATE UNIQUE INDEX uq_brands_owner_name_ci
-  ON brands(owner_user_id, lower(name));
+  ON brands(owner_user_id, lower(btrim(name)));
 
 CREATE INDEX idx_brands_owner_created
   ON brands(owner_user_id, created_at DESC);
+
+CREATE OR REPLACE FUNCTION brands_trim_name()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.name = btrim(NEW.name);
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_brands_trim_name
+  BEFORE INSERT OR UPDATE ON brands
+  FOR EACH ROW
+  EXECUTE FUNCTION brands_trim_name();
 
 CREATE TRIGGER trg_brands_updated_at
   BEFORE UPDATE ON brands

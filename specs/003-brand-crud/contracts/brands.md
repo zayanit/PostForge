@@ -54,20 +54,33 @@ Get one brand's details (FR-005).
 
 ## `DELETE /api/v1/brands/{id}`
 
-Hard delete a brand and its logo, if any (FR-012, FR-014, FR-015).
+Hard delete a brand and its logo, if any (FR-012, FR-013, FR-014, FR-015).
+
+**Request**:
+```json
+{ "confirm_name": "My Brand" }
+```
+`confirm_name` MUST exactly match the brand's current `name` (no trimming or
+case-insensitivity — this is a deliberate confirmation gate, not the same
+comparison FR-003 uses for duplicate detection). The frontend's type-the-name-to-
+confirm control (FR-013) sends whatever the user typed verbatim; the backend is the
+one that actually enforces the match, not just the UI — a request with a missing or
+mismatched `confirm_name` MUST be rejected server-side, since any client holding a
+valid bearer token could otherwise call this endpoint directly and skip the
+confirmation step entirely.
 
 **Response**: `204 No Content`.
 
 **Errors**:
 - `404 BRAND_NOT_FOUND` — same non-owner/nonexistent opacity as `GET`.
+- `409 CONFIRMATION_MISMATCH` — `confirm_name` missing or doesn't exactly match the brand's current name. No deletion occurs.
 
-Deletion order: delete the Storage object (if `logo_path` is set) before deleting the
+Deletion order: validate `confirm_name` first (before touching Storage or the DB
+row); delete the Storage object (if `logo_path` is set) before deleting the
 `brands` row, then delete the row. If Storage deletion fails, the failure is logged
 and the DB row deletion still proceeds — per `research.md` Decision 3's best-effort
 cleanup precedent, a transient Storage error must not make a brand permanently
-undeletable. Frontend confirmation (re-typing the brand name, FR-013) happens
-client-side before this request is ever sent; the endpoint itself performs no
-additional confirmation step.
+undeletable.
 
 ## `POST /api/v1/brands/{id}/logo`
 

@@ -109,7 +109,7 @@ As a signed-in user, I can permanently delete a brand I no longer need, so that 
 - **FR-011**: System MUST reject a logo upload that is not a supported image format or exceeds 5 MB, leaving any existing logo unchanged.
 - **FR-012**: System MUST allow a user to permanently delete a brand they own.
 - **FR-013**: System MUST require the user to explicitly confirm brand deletion by re-entering the brand's exact name before the deletion is carried out.
-- **FR-014**: When a brand is deleted, the system MUST remove both its database record and its stored logo asset (if one exists); this action MUST NOT be reversible and MUST NOT be implemented as a soft delete/trash state.
+- **FR-014**: When a brand is deleted, the system MUST remove its database record, and MUST attempt to remove its stored logo asset (if one exists) as part of the same operation; a storage cleanup failure MUST be logged for operator follow-up but MUST NOT prevent the database record from being removed. This action MUST NOT be reversible and MUST NOT be implemented as a soft delete/trash state.
 - **FR-015**: System MUST NOT limit deletion to brands with no logo — deleting a brand with an existing logo MUST succeed and clean up that logo.
 
 ### Key Entities
@@ -123,7 +123,7 @@ As a signed-in user, I can permanently delete a brand I no longer need, so that 
 - **SC-001**: A new user can create their first brand and see it appear in their brand list in under 1 minute from arriving at the brand list page.
 - **SC-002**: 100% of attempts by a user to view, modify, or delete a brand they don't own are blocked, and are indistinguishable from that brand not existing.
 - **SC-003**: A user with up to 50 brands can locate and open any specific one of them in under 10 seconds.
-- **SC-004**: 100% of successful brand deletions leave no trace of the brand's stored logo asset behind, verified immediately after deletion.
+- **SC-004**: 100% of successful brand deletions remove the database record and attempt logo asset cleanup as part of the same operation; absent a storage failure, this leaves no trace of the logo asset behind, verified immediately after deletion. A storage cleanup failure is logged for operator follow-up rather than automatically retried — it does not block or reverse the deletion itself.
 - **SC-005**: 100% of duplicate-name brand creation attempts are rejected with an immediate, clear message, and never result in a duplicate record.
 - **SC-006**: 100% of accidental-deletion attempts (confirmation step not completed correctly) leave the brand fully intact.
 

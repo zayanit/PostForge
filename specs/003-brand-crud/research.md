@@ -31,8 +31,10 @@ policies from the start.
 
 **Decision**: `00015_create_brand_assets_bucket.sql` creates the `brand-assets`
 bucket via `insert into storage.buckets (id, name, public) values ('brand-assets',
-'brand-assets', true)` (idempotent with `on conflict do nothing`), rather than
-declaring it in `supabase/config.toml`.
+'brand-assets', true) on conflict (id) do update set public = excluded.public` —
+idempotent, and self-healing if the bucket already exists with `public = false`
+(e.g. manually changed via Studio) rather than silently leaving that drift in
+place — instead of declaring it in `supabase/config.toml`.
 
 **Rationale**: This repo manages all schema via versioned SQL migrations
 (`supabase migration up`), applied identically to local and hosted Supabase. The
@@ -75,14 +77,30 @@ rejects. Backend-mediated upload also gives one place to enforce the 5 MB/format
 limit authoritatively (a client-side check alone is trivially bypassable).
 
 **Old logo cleanup**: On a new upload, the backend looks up the brand's current
-`logo_path` before uploading the replacement. After the new object is stored and the
-`brands.logo_path` column is updated to point at it, the backend deletes the old
-object from Storage if one existed (necessary because the path includes the file
-extension, so a format change — e.g. PNG → JPEG — produces a different path, not an
-overwrite of the same key). If that cleanup delete fails, the backend logs it and
-still reports success to the user (the new logo is live and correct) rather than
-blocking on a non-critical storage cleanup — the same best-effort-cleanup precedent
-already established in this spec's edge cases for brand deletion.
+`logo_path` before uploading the replacement. Because the path includes the file
+extension (`brands/{id}/logo.{ext}`), a same-format re-upload (e.g. PNG → PNG)
+produces the *identical* path as the existing logo, while a format change (e.g.
+PNG → JPEG) produces a different one — the cleanup step MUST NOT treat these two
+cases the same way, or a same-format replacement would delete the logo that was
+just uploaded:
+
+1. Upload the new object to its computed path using Storage's upsert/overwrite
+   behavior (so a same-path upload safely replaces the existing object's content
+   at the storage layer itself, rather than the backend managing overwrite
+   semantics manually).
+2. Update `brands.logo_path` to the new path.
+3. Only if the old path was set **and differs** from the new path (a format
+   change), delete the old object — this is safe because it's a genuinely
+   different key from the one just uploaded. If old and new paths are the same,
+   skip this step entirely; the upsert in step 1 already replaced the content,
+   and there is nothing else to clean up.
+
+As before, if the step-3 cleanup delete fails, the backend logs it and still
+reports success to the user (the new logo is live and correct) rather than
+blocking on a non-critical storage cleanup — the same best-effort-cleanup
+precedent already established in this spec's edge cases for brand deletion. This
+ordering also means a failure between steps 1 and 2 can't destroy the old logo:
+the old object is never touched until the new one is confirmed uploaded.
 
 **Alternatives considered**:
 - *Client uploads directly to Supabase Storage with a short-lived signed URL*:

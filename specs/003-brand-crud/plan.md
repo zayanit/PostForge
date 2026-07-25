@@ -95,7 +95,7 @@ specs/003-brand-crud/
 ├── quickstart.md        # Phase 1 output
 ├── contracts/           # Phase 1 output
 │   └── brands.md
-└── tasks.md              # Phase 2 output (/speckit-tasks — not created here)
+└── tasks.md              # Phase 2 output
 ```
 
 ### Source Code (repository root)
