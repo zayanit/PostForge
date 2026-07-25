@@ -64,12 +64,12 @@ case) and invalid-length names are both rejected with no brand created
 
 ### Implementation for User Story 1
 
-- [ ] T004 [P] [US1] Contract test for `POST /api/v1/brands` in `backend/tests/contract/test_brands.py`: empty/too-long name → 400, duplicate name (any case) → 409, valid name → 201 with expected shape (per `contracts/brands.md`)
-- [ ] T005 [US1] Create `backend/app/models/brand.py`: `Brand` response model, `BrandCreate` request model with a `field_validator` on `name` enforcing 2–120 characters after trimming (FR-002) — must match the `brands` table's `CHECK` constraint in `00014_create_brands.sql` exactly, per `contracts/brands.md` and the validator/DB-constraint drift already documented in `CLAUDE.md` for `profile.py`
-- [ ] T006 [US1] Create `backend/app/services/brand_store.py`: `BrandStore` dataclass wrapping `get_engine()` (same pattern as `profile_store.py`), `create_brand()` method that surfaces the DB's unique-violation as a distinguishable duplicate-name error (depends on T005)
-- [ ] T007 [US1] Create `backend/app/routes/brands.py` with the `POST /api/v1/brands` handler (calls `brand_store.create_brand`, maps validation errors to 400 and duplicate-name to 409 per `contracts/brands.md`); register the router in `backend/app/main.py` (depends on T006)
-- [ ] T008 [US1] Integration test in `backend/tests/integration/test_brand_crud.py`: create success, case-insensitive duplicate rejection, name-length validation — against real Supabase (depends on T007)
-- [ ] T009 [US1] Frontend: create-brand page `frontend/app/(dashboard)/brands/new/page.tsx` — form posting to `/api/v1/brands`, inline validation/duplicate-name error display, redirect to the new brand's detail page on success (depends on T007)
+- [X] T004 [P] [US1] Contract test for `POST /api/v1/brands` in `backend/tests/contract/test_brands.py`: empty/too-long name → 400, duplicate name (any case) → 409, valid name → 201 with expected shape (per `contracts/brands.md`)
+- [X] T005 [US1] Create `backend/app/models/brand.py`: `Brand` response model, `BrandCreate` request model with a `field_validator` on `name` enforcing 2–120 characters after trimming (FR-002) — must match the `brands` table's `CHECK` constraint in `00014_create_brands.sql` exactly, per `contracts/brands.md` and the validator/DB-constraint drift already documented in `CLAUDE.md` for `profile.py`
+- [X] T006 [US1] Create `backend/app/services/brand_store.py`: `BrandStore` dataclass wrapping `get_engine()` (same pattern as `profile_store.py`), `create_brand()` method that surfaces the DB's unique-violation as a distinguishable duplicate-name error (depends on T005)
+- [X] T007 [US1] Create `backend/app/routes/brands.py` with the `POST /api/v1/brands` handler (calls `brand_store.create_brand`, maps validation errors to 400 and duplicate-name to 409 per `contracts/brands.md`); register the router in `backend/app/main.py` (depends on T006)
+- [X] T008 [US1] Integration test in `backend/tests/integration/test_brand_crud.py`: create success, case-insensitive duplicate rejection, name-length validation — against real Supabase (depends on T007)
+- [X] T009 [US1] Frontend: create-brand page `frontend/app/(dashboard)/brands/new/page.tsx` — form posting to `/api/v1/brands`, inline validation/duplicate-name error display, redirect to the new brand's detail page on success (depends on T007)
 
 **Checkpoint**: User Story 1 is fully functional and independently testable — this is the deployable MVP
 
