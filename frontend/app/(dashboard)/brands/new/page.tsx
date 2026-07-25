@@ -45,11 +45,12 @@ export default function NewBrandPage() {
   const router = useRouter();
   const apiBase = getPublicEnv("NEXT_PUBLIC_API_URL");
   const [formError, setFormError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
   const {
     register,
     handleSubmit,
     setError,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<BrandFormValues>({
     resolver: zodResolver(brandFormSchema),
     defaultValues: { name: "" },
@@ -57,6 +58,7 @@ export default function NewBrandPage() {
 
   async function submit(values: BrandFormValues) {
     setFormError(null);
+    setIsCreating(true);
 
     try {
       const { data } = await supabase.auth.getSession();
@@ -96,6 +98,8 @@ export default function NewBrandPage() {
       router.push(`/brands/${brand.id}`);
     } catch {
       setFormError("Unable to create your brand.");
+    } finally {
+      setIsCreating(false);
     }
   }
 
@@ -147,14 +151,14 @@ export default function NewBrandPage() {
           <button
             className="rounded-md bg-black px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-60"
             type="submit"
-            disabled={isSubmitting}
+            disabled={isCreating}
           >
-            {isSubmitting ? "Creating..." : "Create brand"}
+            {isCreating ? "Creating..." : "Create brand"}
           </button>
           <button
             className="rounded-md border px-4 py-2 text-sm disabled:opacity-60"
             type="button"
-            disabled={isSubmitting}
+            disabled={isCreating}
             onClick={() => router.push("/")}
           >
             Cancel
