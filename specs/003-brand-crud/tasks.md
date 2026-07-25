@@ -85,14 +85,14 @@ non-owned or nonexistent brand ID both produce the identical "not found" respons
 
 ### Implementation for User Story 2
 
-- [ ] T010 [P] [US2] Contract test for `GET /api/v1/brands` and `GET /api/v1/brands/{id}` in `backend/tests/contract/test_brands.py`: empty list, populated list, 404 for both a non-owned and a nonexistent ID with byte-identical response shape (depends on T005)
-- [ ] T011 [US2] Add `list_brands()` and `get_brand()` to `backend/app/services/brand_store.py` — `get_brand()` raises `LookupError` on not-found/not-owned, matching `ProfileStore.get_profile()`'s existing pattern (depends on T006)
-- [ ] T012 [US2] Add `GET /api/v1/brands` and `GET /api/v1/brands/{id}` handlers to `backend/app/routes/brands.py` (`LookupError` → 404 `BRAND_NOT_FOUND`) (depends on T011)
-- [ ] T013 [US2] Integration test in `backend/tests/integration/test_brand_crud.py`: list with 0/1/many brands, get an owned brand (depends on T012)
-- [ ] T014 [US2] Create `backend/tests/integration/test_brand_rls.py`: cross-user isolation for `GET /brands/{id}` (non-owner and nonexistent ID both 404) plus the direct RLS SQL check from `quickstart.md` Scenario 5 (depends on T012)
-- [ ] T015 [US2] Frontend: brand list page `frontend/app/(dashboard)/brands/page.tsx` (empty state, populated list, link to create) (depends on T012)
-- [ ] T016 [US2] Frontend: brand detail page `frontend/app/(dashboard)/brands/[brandId]/page.tsx` (name, creation date; logo display/upload UI is added by User Story 3) (depends on T012)
-- [ ] T017 [US2] Frontend: add a brand selector to the nav in `frontend/app/(dashboard)/layout.tsx` (depends on T015)
+- [X] T010 [P] [US2] Contract test for `GET /api/v1/brands` and `GET /api/v1/brands/{id}` in `backend/tests/contract/test_brands.py`: empty list, populated list, 404 for both a non-owned and a nonexistent ID with byte-identical response shape (depends on T005)
+- [X] T011 [US2] Add `list_brands()` and `get_brand()` to `backend/app/services/brand_store.py` — `get_brand()` raises `LookupError` on not-found/not-owned, matching `ProfileStore.get_profile()`'s existing pattern (depends on T006)
+- [X] T012 [US2] Add `GET /api/v1/brands` and `GET /api/v1/brands/{id}` handlers to `backend/app/routes/brands.py` (`LookupError` → 404 `BRAND_NOT_FOUND`) (depends on T011)
+- [X] T013 [US2] Integration test in `backend/tests/integration/test_brand_crud.py`: list with 0/1/many brands, get an owned brand (depends on T012)
+- [X] T014 [US2] Create `backend/tests/integration/test_brand_rls.py`: cross-user isolation for `GET /brands/{id}` (non-owner and nonexistent ID both 404) plus the direct RLS SQL check from `quickstart.md` Scenario 5 (depends on T012)
+- [X] T015 [US2] Frontend: brand list page `frontend/app/(dashboard)/brands/page.tsx` (empty state, populated list, link to create) (depends on T012)
+- [X] T016 [US2] Frontend: brand detail page `frontend/app/(dashboard)/brands/[brandId]/page.tsx` (name, creation date; logo display/upload UI is added by User Story 3) (depends on T012)
+- [X] T017 [US2] Frontend: add a brand selector to the nav in `frontend/app/(dashboard)/layout.tsx` (depends on T015)
 
 **Checkpoint**: User Stories 1 AND 2 both work independently — a user can create and navigate their brands
 

@@ -95,6 +95,7 @@ export default function NewBrandPage() {
       }
 
       const brand = body as BrandResponse;
+      window.dispatchEvent(new Event("postforge:brands-changed"));
       router.push(`/brands/${brand.id}`);
     } catch {
       setFormError("Unable to create your brand.");

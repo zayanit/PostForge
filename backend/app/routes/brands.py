@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..auth import CurrentUserDep
-from ..models.brand import Brand, BrandCreate
+from ..models.brand import Brand, BrandCreate, BrandListResponse
 from ..services.brand_store import BrandNameTakenError, BrandStore, get_brand_store
 
 
@@ -24,6 +25,52 @@ def _name_taken() -> HTTPException:
             "message": "You already have a brand with this name.",
         },
     )
+
+
+def _not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"code": "BRAND_NOT_FOUND", "message": "Brand not found."},
+    )
+
+
+@router.get("", response_model=BrandListResponse)
+def list_brands(
+    request: Request,
+    current_user: CurrentUserDep,
+    brand_store: BrandStoreDep,
+) -> BrandListResponse:
+    brands = brand_store.list_brands(current_user.user_id)
+    logger.info(
+        "brands.list_success",
+        extra={
+            "event": "brands.list_success",
+            "request_id": getattr(request.state, "request_id", "unknown"),
+        },
+    )
+    return BrandListResponse(brands=brands)
+
+
+@router.get("/{brand_id}", response_model=Brand)
+def get_brand(
+    request: Request,
+    brand_id: UUID,
+    current_user: CurrentUserDep,
+    brand_store: BrandStoreDep,
+) -> Brand:
+    try:
+        brand = brand_store.get_brand(current_user.user_id, brand_id)
+    except LookupError as exc:
+        raise _not_found() from exc
+
+    logger.info(
+        "brands.get_success",
+        extra={
+            "event": "brands.get_success",
+            "request_id": getattr(request.state, "request_id", "unknown"),
+        },
+    )
+    return brand
 
 
 @router.post("", response_model=Brand, status_code=status.HTTP_201_CREATED)

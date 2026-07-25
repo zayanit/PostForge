@@ -23,3 +23,7 @@ class Brand(BaseModel):
     name: str
     logo_url: str | None
     created_at: datetime
+
+
+class BrandListResponse(BaseModel):
+    brands: list[Brand]

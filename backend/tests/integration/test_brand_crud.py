@@ -63,10 +63,33 @@ def test_create_brand_against_real_supabase():
             headers = {"Authorization": f"Bearer {access_token}"}
 
             with TestClient(app) as api_client:
+                empty_list_response = api_client.get(
+                    "/api/v1/brands",
+                    headers=headers,
+                )
                 create_response = api_client.post(
                     "/api/v1/brands",
                     headers=headers,
                     json={"name": "  Acme Coffee  "},
+                )
+                assert create_response.status_code == 201
+                created_brand = create_response.json()
+                single_list_response = api_client.get(
+                    "/api/v1/brands",
+                    headers=headers,
+                )
+                second_create_response = api_client.post(
+                    "/api/v1/brands",
+                    headers=headers,
+                    json={"name": "Beta Bakery"},
+                )
+                multi_list_response = api_client.get(
+                    "/api/v1/brands",
+                    headers=headers,
+                )
+                detail_response = api_client.get(
+                    f"/api/v1/brands/{created_brand['id']}",
+                    headers=headers,
                 )
                 duplicate_response = api_client.post(
                     "/api/v1/brands",
@@ -84,9 +107,22 @@ def test_create_brand_against_real_supabase():
                     json={"name": "A" * 121},
                 )
 
-            assert create_response.status_code == 201
-            assert create_response.json()["name"] == "Acme Coffee"
-            assert create_response.json()["logo_url"] is None
+            assert empty_list_response.status_code == 200
+            assert empty_list_response.json() == {"brands": []}
+            assert created_brand["name"] == "Acme Coffee"
+            assert created_brand["logo_url"] is None
+            assert single_list_response.status_code == 200
+            assert [brand["name"] for brand in single_list_response.json()["brands"]] == [
+                "Acme Coffee"
+            ]
+            assert second_create_response.status_code == 201
+            assert multi_list_response.status_code == 200
+            assert [brand["name"] for brand in multi_list_response.json()["brands"]] == [
+                "Beta Bakery",
+                "Acme Coffee",
+            ]
+            assert detail_response.status_code == 200
+            assert detail_response.json() == created_brand
             assert duplicate_response.status_code == 409
             assert duplicate_response.json()["error"]["code"] == "BRAND_NAME_TAKEN"
             assert empty_response.status_code == 400
@@ -103,9 +139,13 @@ def test_create_brand_against_real_supabase():
                 },
             )
             assert persisted_response.status_code == 200
-            assert persisted_response.json() == [
-                {"owner_user_id": user_id, "name": "Acme Coffee"}
-            ]
+            assert {
+                (brand["owner_user_id"], brand["name"])
+                for brand in persisted_response.json()
+            } == {
+                (user_id, "Acme Coffee"),
+                (user_id, "Beta Bakery"),
+            }
         finally:
             if user_id:
                 supabase_client.delete(
