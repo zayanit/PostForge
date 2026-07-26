@@ -10,15 +10,15 @@ The non-negotiable product rules (brand-based tenancy, hard delete, key secrecy,
 official-endpoints-only, PNG-only output) live in
 [`.specify/memory/constitution.md`](.specify/memory/constitution.md).
 
-**Current status**: only account authentication/profile management and the Docker
-packaging are implemented so far. Brands, brand kits, provider keys, and image
-generation itself are designed but not yet built.
+**Current status**: account authentication/profile management, Docker packaging,
+and Brand CRUD are implemented. Brand kits, provider keys, and image generation
+are designed but not yet built.
 
 ## Tech stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 14 (App Router, TypeScript) |
+| Frontend | Next.js 15 (App Router, TypeScript) |
 | Backend | FastAPI (Python 3.11) |
 | Auth, database, storage | Supabase |
 | Hosting | Bunny Magic Containers (single container image) |

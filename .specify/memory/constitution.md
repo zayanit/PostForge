@@ -1,29 +1,30 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 1.0.0 → 1.1.0
-Bump rationale: MINOR - Clarified Principle I / Tech Constraints to exempt foundational
-  account infrastructure (auth, user profile) from the "sole product capability" rule,
-  and corrected product name (PostForge AI, matching docs/implementation-plan.md
-  and the repository name). Resolves a CRITICAL finding from /speckit-analyze on
-  specs/001-user-auth-profile: the literal prior wording ("Image generation is the sole
-  product capability") would have forbidden building any authentication feature at all,
-  which is required before brand/generation features can exist.
+Version change: 1.1.0 → 2.0.0
+Bump rationale: MAJOR - Updated the fixed frontend version and replaced unconditional
+  future-capability completion checks with phase-aware applicability. The latter
+  changes which checks block earlier features and is backward-incompatible governance.
 
 Modified principles:
-  - I. Product Truth: added explicit foundational-infrastructure exemption
-  - III. Tech Constraints: "Capability" row reworded to clarify scope
+  - III. Tech Constraints: Next.js 14 → Next.js 15
+  - VII. Definition of Done: unconditional future-capability checks → universal plus
+    phase-aware capability checks with documented N/A rules
 
 Added sections: None
 Removed sections: None
 
-Templates status:
-  - .specify/templates/plan-template.md ✅ No updates needed - generic Constitution Check section will inherit
-  - .specify/templates/spec-template.md ✅ No updates needed - requirements align with constitution
-  - .specify/templates/tasks-template.md ✅ No updates needed - task structure supports RLS tests & hard delete verification
-  - .specify/templates/checklist-template.md ✅ No updates needed - generic template
-  - .specify/templates/agent-file-template.md ✅ No updates needed - generic template
-  - specs/001-user-auth-profile/plan.md ✅ Constitution Check already anticipated this exemption (marked N/A with rationale); no change needed now that it's ratified here
+Templates and guidance status:
+  - .specify/templates/plan-template.md ✅ Updated phase-aware Constitution Check guidance
+  - .specify/templates/spec-template.md ✅ Updated phase dependency/applicability guidance
+  - .specify/templates/tasks-template.md ✅ Updated phase-aware DoD task guidance
+  - .specify/templates/checklist-template.md ✅ Reviewed; generic template needs no change
+  - .specify/templates/agent-file-template.md ✅ Not present in this initialized template set
+  - .opencode/commands/speckit.*.md ✅ Reviewed; no version-specific or unconditional DoD rules
+  - README.md ✅ Updated runtime version and implemented-feature status
+  - CLAUDE.md ✅ Updated implemented-feature status; existing Next.js 15 guidance retained
+  - docs/implementation-plan.md ✅ Updated Next.js version and phase-aware verification checklist
+  - specs/004-provider-keys/plan.md ✅ Constitution blockers resolved against v2.0.0
 
 Deferred TODOs: None
 -->
@@ -61,7 +62,7 @@ The technology stack is fixed for MVP:
 
 | Layer | Technology |
 |-------|------------|
-| Frontend | Next.js 14 monolith |
+| Frontend | Next.js 15 monolith |
 | Backend | FastAPI |
 | Auth, DB, Vault, Storage | Supabase |
 | Hosting | Bunny Magic Containers |
@@ -98,14 +99,39 @@ Security implementation MUST follow these requirements:
 
 ### VII. Definition of Done
 
-A feature is complete only when ALL of the following are verified:
+A feature is complete only when all universal checks and every capability check
+applicable to the current implementation phase are verified.
 
-- [ ] Works correctly for a brand with no brand kit (0 answers)
-- [ ] Works correctly for a brand with a completed brand kit
-- [ ] Works with OpenAI provider
-- [ ] Works with Gemini provider
-- [ ] RLS policies tested OR explicit integration checks documented
-- [ ] Hard delete verified: database rows removed AND storage assets removed
+Universal checks:
+
+- [ ] Acceptance scenarios for the feature pass at the API, data, and user-facing
+      layers it changes
+- [ ] Every table introduced or changed has RLS, forced RLS, policies, and required
+      privileges verified by direct integration tests; backend-only tables also require
+      tests proving client roles are denied
+- [ ] Server-side ownership and secret/logging rules are tested for every affected
+      read and write operation
+- [ ] Every deletable database row, secret, or stored asset affected by the feature
+      is physically removed on successful deletion; soft delete is forbidden
+
+Capability checks become mandatory only when their prerequisite capability exists:
+
+- [ ] Brand-kit zero-answer and completed-kit scenarios are required beginning with
+      the feature that implements Brand Kit, and for later brand-scoped features whose
+      behavior reads or depends on Brand Kit. Before Brand Kit exists, these checks are
+      not applicable.
+- [ ] OpenAI behavior is required beginning with the feature that first integrates
+      OpenAI, and for every later feature that calls or changes that integration.
+- [ ] Gemini behavior is required beginning with the feature that first integrates
+      Gemini, and for every later feature that calls or changes that integration.
+- [ ] Generation lifecycle, platform preset, and PNG-output checks are required
+      beginning with the feature that implements image generation, and for later
+      features that change generation behavior.
+
+A plan MAY mark a capability check not applicable only when its prerequisite has not
+been implemented or the feature cannot affect that capability. The plan MUST record
+that rationale. Once a prerequisite capability exists, applicable checks MUST NOT be
+deferred merely because they belong to an earlier or later roadmap phase.
 
 ## Governance
 
@@ -128,4 +154,4 @@ A feature is complete only when ALL of the following are verified:
 - Plan documents MUST include a Constitution Check section
 - Definition of Done checklist MUST be completed before feature merge
 
-**Version**: 1.1.0 | **Ratified**: 2025-01-28 | **Last Amended**: 2026-07-19
+**Version**: 2.0.0 | **Ratified**: 2025-01-28 | **Last Amended**: 2026-07-26
