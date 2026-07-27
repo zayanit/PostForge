@@ -1,5 +1,7 @@
 import json
 import logging
+import re
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from uuid import uuid4
@@ -10,11 +12,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .config import load_settings
+from .config import assert_database_role_privileges, load_settings
 from .routes.auth import router as auth_router
 from .routes.brands import router as brands_router
 from .routes.health import router as health_router
 from .routes.me import router as me_router
+
+
+_VALIDATION_DEADLINE_SECONDS = 15
+_VALIDATION_PATH = re.compile(
+    r"^/api/v1/brands/[^/]+/keys/[^/]+/validate/?$"
+)
+_SAFE_ERROR_MESSAGES = {
+    (409, "KEY_CLEANUP_REQUIRED"): "Key cleanup is required. Retry deletion.",
+    (409, "BRAND_CLEANUP_REQUIRED"): "Brand cleanup is required. Retry deletion.",
+    (503, "KEY_CLEANUP_REQUIRED"): "Key cleanup did not complete. Retry deletion.",
+    (503, "BRAND_CLEANUP_REQUIRED"): "Brand cleanup did not complete. Retry deletion.",
+}
 
 
 class _JsonLogFormatter(logging.Formatter):
@@ -22,9 +36,15 @@ class _JsonLogFormatter(logging.Formatter):
         payload = {
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
         }
-        for key in ("event", "request_id"):
+        for key in (
+            "event",
+            "request_id",
+            "provider",
+            "code",
+            "duration_ms",
+            "provider_request_id",
+        ):
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = value
@@ -42,6 +62,7 @@ def _configure_logging() -> None:
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     _configure_logging()
+    assert_database_role_privileges()
     yield
 
 
@@ -70,10 +91,24 @@ def _error_response(request_id: str, code: str, message: str, status_code: int) 
     )
 
 
+def safe_error_response(request: Request, status_code: int, code: str) -> JSONResponse:
+    message = _SAFE_ERROR_MESSAGES[(status_code, code)]
+    request_id = getattr(request.state, "request_id", str(uuid4()))
+    return _error_response(request_id, code, message, status_code)
+
+
+def get_validation_deadline(request: Request) -> float | None:
+    return getattr(request.state, "validation_deadline", None)
+
+
 @app.middleware("http")
-async def request_id_middleware(request: Request, call_next: Callable):
+async def request_context_middleware(request: Request, call_next: Callable):
     request_id = str(uuid4())
     request.state.request_id = request_id
+    if _VALIDATION_PATH.fullmatch(request.url.path):
+        request.state.validation_deadline = (
+            time.monotonic() + _VALIDATION_DEADLINE_SECONDS
+        )
     response = await call_next(request)
     response.headers["X-Request-Id"] = request_id
     return response

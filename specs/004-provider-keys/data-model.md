@@ -253,7 +253,7 @@ The `DATABASE_URL` role must be private and have `rolbypassrls = true` (or be su
 - Raw values live only in `vault.secrets` and are read through `vault.decrypted_secrets` by the backend database role.
 - `vault` is not an exposed Data API schema.
 - `PUBLIC`, `anon`, and `authenticated` receive no `USAGE`, `SELECT`, `DELETE`, or Vault function execution privileges. Revokes use exact installed function identities: `vault.create_secret(text,text,text,uuid)` and `vault.update_secret(uuid,text,text,text,uuid)`.
-- The backend role receives only the Vault privileges this feature uses: schema `USAGE`; `EXECUTE` on `vault.create_secret(text,text,text,uuid)`; `SELECT (id, decrypted_secret)` on `vault.decrypted_secrets`; and `SELECT (id), DELETE` on `vault.secrets`. It does not receive `update_secret` execution for this feature.
+- A hosted `DATABASE_URL` role receives only the Vault privileges this feature uses: schema `USAGE`; `EXECUTE` on `vault.create_secret(text,text,text,uuid)`; `SELECT (id, decrypted_secret)` on `vault.decrypted_secrets`; and `SELECT (id), DELETE` on `vault.secrets`. It does not receive `update_secret` execution. The documented local `postgres` exception may retain broader extension-owned privileges; Supabase's built-in `service_role` may also retain extension-owner grants and is never accepted as the hosted database login.
 - Startup/integration checks fail closed if the configured backend role lacks required Vault/application privileges or `BYPASSRLS`/superuser behavior required by forced RLS.
 - Tests verify catalog privileges, direct-role denial with SQLSTATE `42501`, and Data API rejection even for the owner of the corresponding provider-key record.
 

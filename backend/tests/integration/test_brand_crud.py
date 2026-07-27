@@ -8,6 +8,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 
 PNG_A = base64.b64decode(
@@ -48,6 +49,16 @@ def _signup_and_login(
     )
     assert token_response.status_code == 200
     return user_id, token_response.json()["access_token"]
+
+
+def _hard_delete_owned_brands(user_id: str) -> None:
+    from backend.app.config import get_engine
+
+    with get_engine().begin() as connection:
+        connection.execute(
+            text("DELETE FROM brands WHERE owner_user_id = :owner_user_id"),
+            {"owner_user_id": user_id},
+        )
 
 
 def test_create_brand_against_real_supabase():
@@ -223,6 +234,7 @@ def test_create_brand_against_real_supabase():
             assert empty_list_response.json() == {"brands": []}
             assert created_brand["name"] == "Acme Coffee"
             assert created_brand["logo_url"] is None
+            assert created_brand["cleanup_state"] == "normal"
             assert single_list_response.status_code == 200
             assert [brand["name"] for brand in single_list_response.json()["brands"]] == [
                 "Acme Coffee"
@@ -235,6 +247,10 @@ def test_create_brand_against_real_supabase():
             ]
             assert detail_response.status_code == 200
             assert detail_response.json() == created_brand
+            assert all(
+                brand["cleanup_state"] == "normal"
+                for brand in multi_list_response.json()["brands"]
+            )
             assert duplicate_response.status_code == 409
             assert duplicate_response.json()["error"]["code"] == "BRAND_NAME_TAKEN"
             assert empty_response.status_code == 400
@@ -278,6 +294,7 @@ def test_create_brand_against_real_supabase():
                 )
                 assert cleanup_response.is_success
             if user_id:
+                _hard_delete_owned_brands(user_id)
                 supabase_client.delete(
                     f"{supabase_url}/auth/v1/admin/users/{user_id}",
                     headers={
@@ -385,6 +402,7 @@ def test_delete_brands_with_and_without_logo_against_real_supabase():
                 )
                 assert cleanup_response.is_success
             if user_id:
+                _hard_delete_owned_brands(user_id)
                 supabase_client.delete(
                     f"{supabase_url}/auth/v1/admin/users/{user_id}",
                     headers={
@@ -441,6 +459,267 @@ def test_list_and_open_fifty_brands_within_target_time():
             assert elapsed < 10
         finally:
             if user_id:
+                _hard_delete_owned_brands(user_id)
+                supabase_client.delete(
+                    f"{supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}",
+                    },
+                )
+
+
+def test_cleanup_state_mutation_fences_and_authenticated_delete_restriction():
+    supabase_url = _required_env("SUPABASE_URL")
+    supabase_key = _required_env("SUPABASE_SECRET_KEY")
+    _required_env("SUPABASE_JWT_SECRET")
+    _required_env("DATABASE_URL")
+
+    from backend.app.config import get_engine
+    from backend.app.main import app
+
+    user_id: str | None = None
+    active_brand_id: str | None = None
+    cleanup_brand_id: str | None = None
+    operation_id = str(uuid4())
+
+    with httpx.Client(timeout=30.0) as supabase_client:
+        try:
+            user_id, access_token = _signup_and_login(
+                supabase_client,
+                supabase_url,
+                supabase_key,
+                f"brand-fences-{uuid4().hex[:12]}@example.com",
+                "12345678",
+            )
+            headers = {"Authorization": f"Bearer {access_token}"}
+
+            with TestClient(app) as api_client:
+                active_response = api_client.post(
+                    "/api/v1/brands",
+                    headers=headers,
+                    json={"name": "Active Brand"},
+                )
+                cleanup_response = api_client.post(
+                    "/api/v1/brands",
+                    headers=headers,
+                    json={"name": "Cleanup Brand"},
+                )
+                assert (
+                    active_response.status_code
+                    == cleanup_response.status_code
+                    == 201
+                )
+                active_brand_id = active_response.json()["id"]
+                cleanup_brand_id = cleanup_response.json()["id"]
+                assert active_response.json()["cleanup_state"] == "normal"
+
+                engine = get_engine()
+                with engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            """
+                            UPDATE brands
+                            SET deletion_state = 'cleanup_required'
+                            WHERE id = :brand_id
+                            """
+                        ),
+                        {"brand_id": cleanup_brand_id},
+                    )
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO brand_asset_operations (
+                                id, brand_id, operation, state, remote_status
+                            )
+                            VALUES (
+                                :id, :brand_id, 'upload', 'in_progress', 'pending'
+                            )
+                            """
+                        ),
+                        {"id": operation_id, "brand_id": active_brand_id},
+                    )
+
+                list_response = api_client.get("/api/v1/brands", headers=headers)
+                cleanup_detail = api_client.get(
+                    f"/api/v1/brands/{cleanup_brand_id}", headers=headers
+                )
+                cleanup_upload = api_client.post(
+                    f"/api/v1/brands/{cleanup_brand_id}/logo",
+                    headers=headers,
+                    files={"file": ("logo.png", PNG_A, "image/png")},
+                )
+                cleanup_remove = api_client.delete(
+                    f"/api/v1/brands/{cleanup_brand_id}/logo", headers=headers
+                )
+                cleanup_delete = api_client.request(
+                    "DELETE",
+                    f"/api/v1/brands/{cleanup_brand_id}",
+                    headers=headers,
+                    json={"confirm_name": "Cleanup Brand"},
+                )
+                active_upload = api_client.post(
+                    f"/api/v1/brands/{active_brand_id}/logo",
+                    headers=headers,
+                    files={"file": ("logo.png", PNG_A, "image/png")},
+                )
+                active_delete = api_client.request(
+                    "DELETE",
+                    f"/api/v1/brands/{active_brand_id}",
+                    headers=headers,
+                    json={"confirm_name": "Active Brand"},
+                )
+
+                assert list_response.status_code == 200
+                states = {
+                    brand["id"]: brand["cleanup_state"]
+                    for brand in list_response.json()["brands"]
+                }
+                assert states == {
+                    active_brand_id: "normal",
+                    cleanup_brand_id: "cleanup_required",
+                }
+                assert cleanup_detail.status_code == 200
+                assert cleanup_detail.json()["cleanup_state"] == "cleanup_required"
+                assert "deletion_state" not in cleanup_detail.json()
+                for response in (cleanup_upload, cleanup_remove):
+                    assert response.status_code == 409
+                    assert response.json()["error"]["code"] == "BRAND_CLEANUP_REQUIRED"
+                assert cleanup_delete.status_code == 204
+                for response in (active_upload, active_delete):
+                    assert response.status_code == 409
+                    assert (
+                        response.json()["error"]["code"]
+                        == "BRAND_MUTATION_IN_PROGRESS"
+                    )
+
+                authenticated_delete = supabase_client.delete(
+                    f"{supabase_url}/rest/v1/brands",
+                    params={"id": f"eq.{active_brand_id}"},
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {access_token}",
+                    },
+                )
+                assert authenticated_delete.status_code in {401, 403}
+                assert api_client.get(
+                    f"/api/v1/brands/{active_brand_id}", headers=headers
+                ).status_code == 200
+
+                auth_user_delete = supabase_client.delete(
+                    f"{supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}",
+                    },
+                )
+                assert not auth_user_delete.is_success
+                with engine.connect() as connection:
+                    assert connection.execute(
+                        text("SELECT count(*) FROM brands WHERE owner_user_id = :user_id"),
+                        {"user_id": user_id},
+                    ).scalar_one() == 1
+        finally:
+            if active_brand_id:
+                with get_engine().begin() as connection:
+                    connection.execute(
+                        text("DELETE FROM brand_asset_operations WHERE id = :id"),
+                        {"id": operation_id},
+                    )
+            if user_id:
+                _hard_delete_owned_brands(user_id)
+                supabase_client.delete(
+                    f"{supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}",
+                    },
+                )
+
+
+def test_brand_storage_failure_persists_cleanup_required_retry_anchor():
+    supabase_url = _required_env("SUPABASE_URL")
+    supabase_key = _required_env("SUPABASE_SECRET_KEY")
+    _required_env("SUPABASE_JWT_SECRET")
+    _required_env("DATABASE_URL")
+
+    from backend.app.config import get_engine
+    from backend.app.main import app
+    from backend.app.routes.brands import get_brand_storage
+    from backend.app.services.brand_storage import BrandStorageError
+
+    class ControllableStorage:
+        fail_delete = True
+
+        async def delete_logo(self, path: str) -> None:
+            if self.fail_delete:
+                raise BrandStorageError
+
+    user_id: str | None = None
+    brand_id = str(uuid4())
+    logo_path = f"brands/{brand_id}/logo.png"
+    with httpx.Client(timeout=30.0) as supabase_client:
+        try:
+            user_id, access_token = _signup_and_login(
+                supabase_client,
+                supabase_url,
+                supabase_key,
+                f"brand-cleanup-anchor-{uuid4().hex[:12]}@example.com",
+                "12345678",
+            )
+            with get_engine().begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO brands (id, owner_user_id, name, logo_path) "
+                        "VALUES (:id, :owner_user_id, 'Cleanup Anchor', :logo_path)"
+                    ),
+                    {
+                        "id": brand_id,
+                        "owner_user_id": user_id,
+                        "logo_path": logo_path,
+                    },
+                )
+
+            storage = ControllableStorage()
+            app.dependency_overrides[get_brand_storage] = lambda: storage
+            with TestClient(app) as api_client:
+                response = api_client.request(
+                    "DELETE",
+                    f"/api/v1/brands/{brand_id}",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    json={"confirm_name": "Cleanup Anchor"},
+                )
+
+            assert response.status_code == 503
+            assert response.json()["error"]["code"] == "BRAND_CLEANUP_REQUIRED"
+            with get_engine().connect() as connection:
+                retained = connection.execute(
+                    text(
+                        "SELECT deletion_state, logo_path FROM brands WHERE id = :id"
+                    ),
+                    {"id": brand_id},
+                ).one()
+            assert retained.deletion_state == "cleanup_required"
+            assert retained.logo_path == logo_path
+
+            storage.fail_delete = False
+            with TestClient(app) as api_client:
+                retry = api_client.request(
+                    "DELETE",
+                    f"/api/v1/brands/{brand_id}",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    json={"confirm_name": "Cleanup Anchor"},
+                )
+            assert retry.status_code == 204
+            with get_engine().connect() as connection:
+                assert connection.execute(
+                    text("SELECT count(*) FROM brands WHERE id = :id"),
+                    {"id": brand_id},
+                ).scalar_one() == 0
+        finally:
+            app.dependency_overrides.clear()
+            if user_id:
+                _hard_delete_owned_brands(user_id)
                 supabase_client.delete(
                     f"{supabase_url}/auth/v1/admin/users/{user_id}",
                     headers={

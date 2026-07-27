@@ -13,7 +13,13 @@ from ..services.brand_storage import (
     BrandStorageError,
     get_brand_storage,
 )
-from ..services.brand_store import BrandNameTakenError, BrandStore, get_brand_store
+from ..services.brand_store import (
+    BrandCleanupRequiredError,
+    BrandMutationInProgressError,
+    BrandNameTakenError,
+    BrandStore,
+    get_brand_store,
+)
 
 
 router = APIRouter(prefix="/api/v1/brands", tags=["brands"])
@@ -55,6 +61,44 @@ def _confirmation_mismatch() -> HTTPException:
             "message": "The confirmation name does not match the brand name.",
         },
     )
+
+
+def _cleanup_required() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "BRAND_CLEANUP_REQUIRED",
+            "message": "Brand cleanup is required. Retry deletion.",
+        },
+    )
+
+
+def _cleanup_failed() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "BRAND_CLEANUP_REQUIRED",
+            "message": "Brand cleanup did not complete. Retry deletion.",
+        },
+    )
+
+
+def _mutation_in_progress() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "BRAND_MUTATION_IN_PROGRESS",
+            "message": "A brand update is in progress. Retry shortly.",
+        },
+    )
+
+
+def _mutation_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, BrandCleanupRequiredError):
+        return _cleanup_required()
+    if isinstance(exc, BrandMutationInProgressError):
+        return _mutation_in_progress()
+    return _not_found()
 
 
 def _unsupported_media_type() -> HTTPException:
@@ -176,14 +220,18 @@ async def delete_brand(
         raise _confirmation_mismatch()
 
     try:
-        logo_path = brand_store.get_logo_path(current_user.user_id, brand_id)
-    except LookupError as exc:
-        raise _not_found() from exc
+        logo_path = brand_store.begin_brand_cleanup(current_user.user_id, brand_id)
+    except (
+        LookupError,
+        BrandCleanupRequiredError,
+        BrandMutationInProgressError,
+    ) as exc:
+        raise _mutation_error(exc) from exc
 
     if logo_path:
         try:
             await brand_storage.delete_logo(logo_path)
-        except BrandStorageError:
+        except BrandStorageError as exc:
             logger.warning(
                 "brands.delete_logo_cleanup_failed",
                 extra={
@@ -191,11 +239,16 @@ async def delete_brand(
                     "request_id": getattr(request.state, "request_id", "unknown"),
                 },
             )
+            raise _cleanup_failed() from exc
 
     try:
-        brand_store.delete_brand(current_user.user_id, brand_id)
-    except LookupError as exc:
-        raise _not_found() from exc
+        brand_store.delete_brand_after_cleanup(current_user.user_id, brand_id)
+    except (
+        LookupError,
+        BrandCleanupRequiredError,
+        BrandMutationInProgressError,
+    ) as exc:
+        raise _mutation_error(exc) from exc
 
     logger.info(
         "brands.delete_success",
@@ -218,8 +271,12 @@ async def upload_brand_logo(
 ) -> Brand:
     try:
         old_path = brand_store.get_logo_path(current_user.user_id, brand_id)
-    except LookupError as exc:
-        raise _not_found() from exc
+    except (
+        LookupError,
+        BrandCleanupRequiredError,
+        BrandMutationInProgressError,
+    ) as exc:
+        raise _mutation_error(exc) from exc
 
     content_type = file.content_type or ""
     extension = LOGO_TYPES.get(content_type)
@@ -261,8 +318,11 @@ async def upload_brand_logo(
                         "request_id": getattr(request.state, "request_id", "unknown"),
                     },
                 )
-        if isinstance(exc, LookupError):
-            raise _not_found() from exc
+        if isinstance(
+            exc,
+            (LookupError, BrandCleanupRequiredError, BrandMutationInProgressError),
+        ):
+            raise _mutation_error(exc) from exc
         raise
 
     if old_path and old_path != new_path:
@@ -297,16 +357,24 @@ async def delete_brand_logo(
 ) -> Response:
     try:
         old_path = brand_store.get_logo_path(current_user.user_id, brand_id)
-    except LookupError as exc:
-        raise _not_found() from exc
+    except (
+        LookupError,
+        BrandCleanupRequiredError,
+        BrandMutationInProgressError,
+    ) as exc:
+        raise _mutation_error(exc) from exc
 
     if old_path is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     try:
         brand_store.update_logo_path(current_user.user_id, brand_id, None)
-    except LookupError as exc:
-        raise _not_found() from exc
+    except (
+        LookupError,
+        BrandCleanupRequiredError,
+        BrandMutationInProgressError,
+    ) as exc:
+        raise _mutation_error(exc) from exc
     try:
         await brand_storage.delete_logo(old_path)
     except BrandStorageError:
