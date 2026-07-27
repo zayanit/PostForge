@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -37,7 +37,7 @@ class FakeBrandStore:
             id=UUID("22222222-2222-2222-2222-222222222222"),
             name=payload.name,
             logo_url=None,
-            created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+            created_at=datetime(2026, 7, 25, tzinfo=UTC),
         )
         self.brands.insert(0, brand)
         self.owners[brand.id] = user_id
@@ -221,13 +221,13 @@ def test_list_brands_returns_empty_and_populated_contract_shapes():
                     id=UUID("33333333-3333-3333-3333-333333333333"),
                     name="New Brand",
                     logo_url=None,
-                    created_at=datetime(2026, 7, 26, tzinfo=timezone.utc),
+                    created_at=datetime(2026, 7, 26, tzinfo=UTC),
                 ),
                 Brand(
                     id=UUID("22222222-2222-2222-2222-222222222222"),
                     name="First Brand",
                     logo_url=None,
-                    created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+                    created_at=datetime(2026, 7, 25, tzinfo=UTC),
                 ),
             ]
             populated_response = client.get("/api/v1/brands")
@@ -262,7 +262,7 @@ def test_get_brand_returns_owned_brand_and_opaque_not_found_errors():
         id=UUID("22222222-2222-2222-2222-222222222222"),
         name="Acme Coffee",
         logo_url=None,
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     store = FakeBrandStore(brands=[owned_brand])
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
@@ -306,7 +306,7 @@ def test_cleanup_required_brand_remains_visible_in_list_and_detail():
         name="Cleanup Brand",
         logo_url=None,
         cleanup_state="cleanup_required",
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     store = FakeBrandStore(brands=[brand], cleanup_required={brand.id})
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
@@ -345,7 +345,7 @@ def test_logo_and_brand_mutations_respect_brand_fences(
         id=UUID("22222222-2222-2222-2222-222222222222"),
         name="Acme Coffee",
         logo_url=None,
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     store = FakeBrandStore(brands=[brand])
     getattr(store, fence_field).add(brand.id)
@@ -401,7 +401,7 @@ def test_upload_logo_rejects_unsupported_or_spoofed_content(
         id=UUID("22222222-2222-2222-2222-222222222222"),
         name="Acme Coffee",
         logo_url=None,
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     store = FakeBrandStore(brands=[brand])
     storage = FakeBrandStorage()
@@ -433,7 +433,7 @@ def test_upload_logo_rejects_files_over_five_megabytes():
         id=UUID("22222222-2222-2222-2222-222222222222"),
         name="Acme Coffee",
         logo_url=None,
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     store = FakeBrandStore(brands=[brand])
     storage = FakeBrandStorage()
@@ -466,7 +466,7 @@ def test_upload_logo_returns_updated_brand():
         id=UUID("22222222-2222-2222-2222-222222222222"),
         name="Acme Coffee",
         logo_url=None,
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     store = FakeBrandStore(brands=[brand])
     storage = FakeBrandStorage()
@@ -501,7 +501,7 @@ def test_delete_logo_without_existing_logo_is_idempotent():
         id=UUID("22222222-2222-2222-2222-222222222222"),
         name="Acme Coffee",
         logo_url=None,
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     store = FakeBrandStore(brands=[brand])
     storage = FakeBrandStorage()
@@ -530,7 +530,7 @@ def test_delete_brand_with_exact_confirmation_removes_brand_and_logo():
         id=UUID("22222222-2222-2222-2222-222222222222"),
         name="Acme Coffee",
         logo_url="https://example.supabase.co/logo.png",
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     logo_path = f"brands/{brand.id}/logo.png"
     store = FakeBrandStore(brands=[brand], logo_paths={brand.id: logo_path})
@@ -564,7 +564,7 @@ def test_delete_brand_storage_failure_retains_cleanup_required_brand():
         id=UUID("22222222-2222-2222-2222-222222222222"),
         name="Acme Coffee",
         logo_url="https://example.supabase.co/logo.png",
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     logo_path = f"brands/{brand.id}/logo.png"
     store = FakeBrandStore(brands=[brand], logo_paths={brand.id: logo_path})
@@ -620,7 +620,7 @@ def test_delete_brand_rejects_missing_or_wrong_confirmation_without_mutation(
         id=UUID("22222222-2222-2222-2222-222222222222"),
         name="Acme Coffee",
         logo_url=None,
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     store = FakeBrandStore(brands=[brand])
     storage = FakeBrandStorage()
@@ -654,7 +654,7 @@ def test_delete_brand_returns_opaque_not_found_for_non_owner_and_nonexistent_bra
         id=UUID("22222222-2222-2222-2222-222222222222"),
         name="Another Owner Brand",
         logo_url=None,
-        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
     )
     store = FakeBrandStore(
         brands=[brand],

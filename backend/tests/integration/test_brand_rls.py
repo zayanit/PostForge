@@ -252,14 +252,12 @@ def test_brand_operations_are_owner_scoped_at_api_and_database_layers():
                         ]
                     },
                 )
-                assert cleanup_response.is_success
-                from backend.app.config import get_engine
-
                 with get_engine().begin() as connection:
                     connection.execute(
                         text("DELETE FROM brands WHERE id = :brand_id"),
                         {"brand_id": brand_id},
                     )
+                assert cleanup_response.is_success
             for user_id in (user_a_id, user_b_id):
                 if user_id:
                     supabase_client.delete(

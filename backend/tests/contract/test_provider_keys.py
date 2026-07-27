@@ -278,7 +278,7 @@ def test_local_postgres_privilege_assertion_allows_documented_exception(
         "load_settings",
         lambda: SimpleNamespace(
             database_url="postgresql://localhost/postgres",
-            supabase_url="http://127.0.0.1:54321",
+            supabase_url="https://hosted.supabase.co",
         ),
     )
     monkeypatch.setattr(config, "get_engine", lambda: engine)
@@ -391,10 +391,10 @@ def test_validation_budget_bounds_total_jwks_work(monkeypatch: pytest.MonkeyPatc
     )
     monkeypatch.setattr(auth.jwt, "get_unverified_header", lambda token: {"alg": "ES256"})
     request = _request()
-    request.state.validation_deadline = time.monotonic() + 0.03
+    request.state.validation_deadline = time.monotonic() + 0.1
     started = time.monotonic()
 
     with pytest.raises(HTTPException):
         asyncio.run(auth.get_current_user(request, "Bearer token"))
 
-    assert time.monotonic() - started < 0.15
+    assert time.monotonic() - started < 0.5

@@ -118,7 +118,7 @@ def assert_database_role_privileges() -> None:
     role_name = privileges.pop("role_name")
     is_superuser = privileges.pop("is_superuser")
     vault_least_privilege = privileges.pop("vault_least_privilege")
-    hostname = urlparse(settings.supabase_url).hostname
+    hostname = urlparse(settings.database_url).hostname
     local_postgres = role_name == "postgres" and hostname in {
         "127.0.0.1",
         "localhost",
