@@ -1,6 +1,6 @@
 # Phase 1 Data Model: Provider Keys
 
-## Supporting Types and Ownership Helper
+## Supporting Types and Private Ownership Helper
 
 The migration first ensures `supabase_vault` is available (`CREATE EXTENSION IF NOT EXISTS supabase_vault CASCADE`) and introduces types shared by provider-key records and future generation records:
 
@@ -10,10 +10,15 @@ CREATE TYPE provider_key_lifecycle_t AS ENUM ('normal', 'cleanup_required');
 CREATE TYPE brand_deletion_state_t AS ENUM ('active', 'cleanup_required');
 ```
 
-It also introduces the deferred ownership helper anticipated by the Brand CRUD research:
+It also introduces the deferred ownership helper anticipated by the Brand CRUD research
+in a schema that is not listed in Supabase's exposed API schemas:
 
 ```sql
-CREATE FUNCTION is_brand_owner(p_brand_id UUID)
+CREATE SCHEMA IF NOT EXISTS private;
+REVOKE ALL ON SCHEMA private FROM PUBLIC, anon, authenticated;
+GRANT USAGE ON SCHEMA private TO authenticated, service_role;
+
+CREATE FUNCTION private.is_brand_owner(p_brand_id UUID)
 RETURNS BOOLEAN
 LANGUAGE sql
 STABLE
@@ -27,9 +32,17 @@ AS $$
       AND owner_user_id = (SELECT auth.uid())
   );
 $$;
+
+REVOKE ALL ON FUNCTION private.is_brand_owner(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION private.is_brand_owner(UUID) TO authenticated, service_role;
 ```
 
-Execution is revoked from `PUBLIC` and granted only to `authenticated` and `service_role`. The empty search path and fully qualified names prevent object-shadowing attacks in a `SECURITY DEFINER` function.
+The `private` schema is deliberately absent from `supabase/config.toml`'s exposed API
+schemas, so PostgREST cannot publish the helper as an authenticated RPC. `authenticated`
+and `service_role` receive schema `USAGE` plus exact function `EXECUTE` because RLS
+policies run under the querying role; they receive no schema `CREATE`. Execution remains
+revoked from `PUBLIC`. The empty search path and fully qualified names prevent
+object-shadowing attacks in a `SECURITY DEFINER` function.
 
 ## Existing Entity Change: Brand
 
@@ -206,18 +219,18 @@ ALTER TABLE provider_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE provider_keys FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY provider_keys_select ON provider_keys
-  FOR SELECT USING (is_brand_owner(brand_id));
+  FOR SELECT USING (private.is_brand_owner(brand_id));
 
 CREATE POLICY provider_keys_insert ON provider_keys
-  FOR INSERT WITH CHECK (is_brand_owner(brand_id));
+  FOR INSERT WITH CHECK (private.is_brand_owner(brand_id));
 
 CREATE POLICY provider_keys_update ON provider_keys
   FOR UPDATE
-  USING (is_brand_owner(brand_id))
-  WITH CHECK (is_brand_owner(brand_id));
+  USING (private.is_brand_owner(brand_id))
+  WITH CHECK (private.is_brand_owner(brand_id));
 
 CREATE POLICY provider_keys_delete ON provider_keys
-  FOR DELETE USING (is_brand_owner(brand_id));
+  FOR DELETE USING (private.is_brand_owner(brand_id));
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON provider_keys TO service_role;
 

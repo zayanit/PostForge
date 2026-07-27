@@ -18,7 +18,7 @@ Templates and guidance status:
   - .specify/templates/plan-template.md ✅ Updated phase-aware Constitution Check guidance
   - .specify/templates/spec-template.md ✅ Updated phase dependency/applicability guidance
   - .specify/templates/tasks-template.md ✅ Updated phase-aware DoD task guidance
-  - .specify/templates/checklist-template.md ✅ Reviewed; generic template needs no change
+  - .specify/templates/checklist-template.md ✅ Updated /speckit.checklist command references
   - .specify/templates/agent-file-template.md ✅ Not present in this initialized template set
   - .opencode/commands/speckit.*.md ✅ Reviewed; no version-specific or unconditional DoD rules
   - README.md ✅ Updated runtime version and implemented-feature status

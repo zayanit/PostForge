@@ -40,10 +40,12 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file. Evaluate all universal Definition of
-Done checks and each capability check whose prerequisite exists in the current
-implementation phase. Mark a capability check N/A only with a concrete rationale
-that its prerequisite is not implemented or this feature cannot affect it.]
+[Determine gates from the constitution file. Before Phase 0, identify all universal
+Definition of Done checks and each capability check whose prerequisite is already
+implemented, regardless of roadmap phase. For every applicable check, document how it
+will be verified during implementation or runtime validation; do not claim it has
+already passed. Mark a check N/A only with a concrete rationale that its prerequisite
+is not implemented or the feature's scope cannot affect that capability.]
 
 ## Project Structure
 

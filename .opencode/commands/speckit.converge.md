@@ -202,9 +202,10 @@ Append to the **end** of `tasks.md`, per the append contract:
    zero-padded IDs `T{M+1:03d}, T{M+2:03d}, …`:
 
    ```markdown
-   - [ ] T042 <imperative description> per <source-ref> (<gap-type>)
+   - [ ] T042 <imperative description with exact affected file path> per <source-ref> (<gap-type>)
    ```
 
+   The imperative description MUST name the exact affected file path.
    `<source-ref>` traces the task to its origin: e.g. `FR-003`, `SC-002`,
    `US1/AC2`, `plan: storage decision`, `Constitution II`.
 

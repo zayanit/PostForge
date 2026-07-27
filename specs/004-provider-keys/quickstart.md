@@ -77,10 +77,10 @@ Then validate real disposable keys through the UI:
 2. Repeat each operation with nonexistent UUIDs. Confirm status, error code, and message match the non-owned case; only request IDs differ.
 3. Execute direct SQL as User A's `authenticated` role. Confirm safe-column SELECT can see only User A's records, internal Vault/lease columns are permission-denied, and INSERT/UPDATE/DELETE are permission-denied even for owned rows.
 4. Repeat as User B. Confirm safe-column SELECT returns no User A rows and all writes remain permission-denied.
-5. Verify catalog privileges show no Vault schema/table/view/function access for `anon` or `authenticated`, and verify the configured backend database role has exactly the required Vault/application privileges.
+5. Verify catalog privileges show no Vault schema/table/view/function access for `anon` or `authenticated`. In hosted deployments, verify the configured backend database role has exactly the required Vault/application privileges. In local development, the documented `postgres`/superuser exception may have broader privileges, but it must still provide every required Vault/application capability.
 6. As `authenticated`, attempt direct reads from `vault.secrets` and `vault.decrypted_secrets`, secret creation, update, and deletion. Require SQLSTATE `42501` rather than an empty result.
 7. As both `anon` and `authenticated`, attempt direct SELECT/INSERT/UPDATE/DELETE against `provider_key_idempotency` and `brand_asset_operations`. Require permission denial for every operation, including when the referenced brand is owned by the authenticated user.
-8. With a real authenticated JWT, attempt Data API access to both backend-only tables, a `vault` profile, and attempted Vault RPCs. Confirm all are unavailable for both User A and User B.
+8. With a real authenticated JWT, attempt Data API access to both backend-only tables, a `vault` profile, Vault RPCs, and the `private.is_brand_owner` helper RPC. Confirm all are unavailable for both User A and User B while normal owner-scoped metadata reads still exercise the helper through RLS.
 
 Expected: clients cannot retrieve even their own raw key; all Vault access is backend-only, and provider-key metadata remains brand-isolated at API and database layers.
 
