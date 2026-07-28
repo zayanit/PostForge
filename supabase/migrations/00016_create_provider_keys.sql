@@ -203,9 +203,7 @@ REVOKE ALL ON brand_asset_operations FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON brands FROM authenticated;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON provider_keys TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON provider_key_idempotency TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON provider_key_idempotency TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON brand_asset_operations TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON brand_asset_operations TO service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON brands TO service_role;
 

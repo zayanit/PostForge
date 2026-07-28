@@ -4,14 +4,26 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
+from uuid import UUID
 
 import pytest
 from fastapi import HTTPException, Request
+from fastapi.testclient import TestClient
 from starlette.responses import Response
 
 from backend.app import auth, config, main
+from backend.app.auth import CurrentUser, get_current_user
+from backend.app.models.provider_key import ProviderKey, ProviderKeyAdd
+from backend.app.routes.provider_keys import get_provider_key_store
+from backend.app.services.brand_store import BrandCleanupRequiredError
+from backend.app.services.provider_key_store import (
+    IdempotencyKeyRetiredError,
+    VaultUnavailableError,
+)
 
 
 def _request(path: str = "/api/v1/brands/brand-id/keys/key-id/validate") -> Request:
@@ -398,3 +410,246 @@ def test_validation_budget_bounds_total_jwks_work(monkeypatch: pytest.MonkeyPatc
         asyncio.run(auth.get_current_user(request, "Bearer token"))
 
     assert time.monotonic() - started < 0.5
+
+
+BRAND_ID = UUID("22222222-2222-2222-2222-222222222222")
+KEY_ID = UUID("33333333-3333-3333-3333-333333333333")
+REQUEST_ID = UUID("44444444-4444-4444-4444-444444444444")
+RAW_KEY = "contract-provider-secret-A1B2"
+
+
+def _safe_key(**updates) -> ProviderKey:
+    values = {
+        "id": KEY_ID,
+        "provider": "openai",
+        "label": "Production Key",
+        "key_hint": "***A1B2",
+        "is_active": True,
+        "is_valid": None,
+        "last_validated_at": None,
+        "last_validation_error": None,
+        "cleanup_state": "normal",
+        "created_at": datetime(2026, 7, 26, 11, tzinfo=UTC),
+    }
+    values.update(updates)
+    return ProviderKey.model_validate(values)
+
+
+@dataclass
+class FakeProviderKeyStore:
+    keys: list[ProviderKey] = field(default_factory=list)
+    error: Exception | None = None
+    add_calls: list[tuple[str, UUID, ProviderKeyAdd, UUID]] = field(default_factory=list)
+
+    def list_keys(self, user_id: str, brand_id: UUID) -> list[ProviderKey]:
+        if self.error:
+            raise self.error
+        return self.keys
+
+    def add_key(
+        self,
+        user_id: str,
+        brand_id: UUID,
+        payload: ProviderKeyAdd,
+        idempotency_key: UUID,
+    ) -> ProviderKey:
+        self.add_calls.append((user_id, brand_id, payload, idempotency_key))
+        if self.error:
+            raise self.error
+        return self.keys[0] if self.keys else _safe_key(is_active=payload.make_active)
+
+
+@pytest.fixture
+def provider_key_client():
+    store = FakeProviderKeyStore()
+    main.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="11111111-1111-1111-1111-111111111111",
+        email="owner@example.com",
+        access_token="redacted",
+    )
+    main.app.dependency_overrides[get_provider_key_store] = lambda: store
+    try:
+        with TestClient(main.app) as client:
+            yield client, store
+    finally:
+        main.app.dependency_overrides.clear()
+
+
+def test_list_keys_returns_exact_empty_and_populated_safe_shapes(provider_key_client):
+    client, store = provider_key_client
+    empty = client.get(f"/api/v1/brands/{BRAND_ID}/keys")
+    store.keys = [_safe_key()]
+    populated = client.get(f"/api/v1/brands/{BRAND_ID}/keys")
+
+    assert empty.status_code == 200
+    assert empty.json() == {"keys": []}
+    assert populated.status_code == 200
+    assert populated.json() == {
+        "keys": [
+            {
+                "id": str(KEY_ID),
+                "provider": "openai",
+                "label": "Production Key",
+                "key_hint": "***A1B2",
+                "is_active": True,
+                "is_valid": None,
+                "last_validated_at": None,
+                "last_validation_error": None,
+                "cleanup_state": "normal",
+                "created_at": "2026-07-26T11:00:00Z",
+            }
+        ]
+    }
+    forbidden = {"brand_id", "vault_secret_id", "lifecycle", "validation_token", "updated_at"}
+    assert forbidden.isdisjoint(populated.json()["keys"][0])
+
+
+@pytest.mark.parametrize("make_active", [None, True, False])
+def test_add_key_defaults_active_and_returns_only_safe_shape(provider_key_client, make_active):
+    client, store = provider_key_client
+    body = {"provider": "openai", "key": RAW_KEY, "label": "Production Key"}
+    if make_active is not None:
+        body["make_active"] = make_active
+
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys",
+        headers={"Idempotency-Key": str(REQUEST_ID)},
+        json=body,
+    )
+
+    expected_active = True if make_active is None else make_active
+    assert response.status_code == 201
+    assert response.json()["is_active"] is expected_active
+    assert response.json()["key_hint"] == "***A1B2"
+    assert RAW_KEY not in response.text
+    assert store.add_calls[0][2].key == RAW_KEY
+    assert store.add_calls[0][2].make_active is expected_active
+    assert store.add_calls[0][3] == REQUEST_ID
+
+
+@pytest.mark.parametrize("header", [None, "not-a-uuid"])
+def test_add_key_requires_uuid_idempotency_header(provider_key_client, header):
+    client, store = provider_key_client
+    headers = {} if header is None else {"Idempotency-Key": header}
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys",
+        headers=headers,
+        json={"provider": "openai", "key": RAW_KEY},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert response.headers["X-Request-Id"] == response.json()["error"]["request_id"]
+    assert store.add_calls == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"provider": "unsupported", "key": RAW_KEY},
+        {"provider": "openai", "key": ""},
+        {"provider": "openai", "key": "     "},
+        {"provider": "openai", "key": "abcd"},
+        {"provider": "openai", "key": "secret-ab!?"},
+        {"provider": "openai", "key": RAW_KEY, "label": "x" * 101},
+        {"provider": "openai", "key": RAW_KEY, "label": f"contains {RAW_KEY}"},
+    ],
+)
+def test_add_key_rejects_invalid_raw_request_before_store(provider_key_client, body):
+    client, store = provider_key_client
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys",
+        headers={"Idempotency-Key": str(REQUEST_ID)},
+        json=body,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert RAW_KEY not in response.text
+    assert store.add_calls == []
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "code", "message"),
+    [
+        (LookupError(), 404, "BRAND_NOT_FOUND", "Brand not found."),
+        (
+            BrandCleanupRequiredError(),
+            409,
+            "BRAND_CLEANUP_REQUIRED",
+            "Brand cleanup is required. Retry deletion.",
+        ),
+        (
+            IdempotencyKeyRetiredError(),
+            409,
+            "IDEMPOTENCY_KEY_RETIRED",
+            "This add request was already completed and deleted. Use a new request ID.",
+        ),
+        (
+            VaultUnavailableError(),
+            502,
+            "VAULT_UNAVAILABLE",
+            "Secure key storage is unavailable right now.",
+        ),
+    ],
+)
+def test_provider_key_errors_use_exact_safe_envelopes(
+    provider_key_client, error, status_code, code, message
+):
+    client, store = provider_key_client
+    store.error = error
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys",
+        headers={"Idempotency-Key": str(REQUEST_ID)},
+        json={"provider": "gemini", "key": RAW_KEY},
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["error"]["code"] == code
+    assert response.json()["error"]["message"] == message
+    assert response.headers["X-Request-Id"] == response.json()["error"]["request_id"]
+    assert RAW_KEY not in response.text
+
+
+def test_opaque_brand_error_is_identical_for_list_and_add(provider_key_client):
+    client, store = provider_key_client
+    store.error = LookupError()
+    list_response = client.get(f"/api/v1/brands/{BRAND_ID}/keys")
+    add_response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys",
+        headers={"Idempotency-Key": str(REQUEST_ID)},
+        json={"provider": "openai", "key": RAW_KEY},
+    )
+
+    for response in (list_response, add_response):
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "BRAND_NOT_FOUND"
+        assert response.json()["error"]["message"] == "Brand not found."
+
+
+def test_response_model_filters_internal_store_fields(provider_key_client):
+    client, store = provider_key_client
+    store.keys = [
+        {
+            **_safe_key().model_dump(),
+            "brand_id": BRAND_ID,
+            "vault_secret_id": UUID("55555555-5555-5555-5555-555555555555"),
+            "lifecycle": "normal",
+            "raw_key": RAW_KEY,
+        }
+    ]
+    response = client.get(f"/api/v1/brands/{BRAND_ID}/keys")
+
+    assert response.status_code == 200
+    assert RAW_KEY not in response.text
+    assert "vault_secret_id" not in response.text
+
+
+def test_add_uses_no_provider_client_dependency(provider_key_client):
+    client, _ = provider_key_client
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys",
+        headers={"Idempotency-Key": str(REQUEST_ID)},
+        json={"provider": "openai", "key": RAW_KEY},
+    )
+    assert response.status_code == 201

@@ -17,6 +17,7 @@ from .routes.auth import router as auth_router
 from .routes.brands import router as brands_router
 from .routes.health import router as health_router
 from .routes.me import router as me_router
+from .routes.provider_keys import router as provider_keys_router
 
 
 _VALIDATION_DEADLINE_SECONDS = 15
@@ -152,3 +153,4 @@ app.include_router(auth_router)
 app.include_router(brands_router)
 app.include_router(health_router)
 app.include_router(me_router)
+app.include_router(provider_keys_router)

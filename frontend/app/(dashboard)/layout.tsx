@@ -70,7 +70,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     };
   }, [apiBase]);
 
-  const pathBrandId = pathname.match(/^\/brands\/([^/]+)$/)?.[1];
+  const pathBrandId = pathname.match(/^\/brands\/([^/]+)(?:\/.*)?$/)?.[1];
   const selectedBrandId = pathBrandId === "new" ? "" : (pathBrandId ?? "");
 
   async function handleLogout() {

@@ -7,6 +7,7 @@ from uuid import uuid4
 import httpx
 import jwt
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
@@ -87,7 +88,6 @@ def security_fixture():
     engine = get_engine()
     user_ids: list[str] = []
     brand_ids: list[str] = []
-    key_ids: list[str] = []
     with httpx.Client(timeout=30.0) as client:
         try:
             user_a, token_a = _signup_and_login(
@@ -106,7 +106,6 @@ def security_fixture():
             brand_a, brand_b = str(uuid4()), str(uuid4())
             key_a, key_b = str(uuid4()), str(uuid4())
             brand_ids.extend((brand_a, brand_b))
-            key_ids.extend((key_a, key_b))
             with engine.begin() as connection:
                 connection.execute(
                     text(
@@ -149,14 +148,29 @@ def security_fixture():
                 "key_a": key_a,
             })
         finally:
-            if key_ids:
+            if brand_ids:
                 with engine.begin() as connection:
+                    vault_ids = connection.execute(
+                        text(
+                            "SELECT vault_secret_id FROM provider_keys "
+                            "WHERE brand_id = ANY(CAST(:ids AS uuid[]))"
+                        ),
+                        {"ids": brand_ids},
+                    ).scalars().all()
+                    if vault_ids:
+                        connection.execute(
+                            text(
+                                "DELETE FROM vault.secrets "
+                                "WHERE id = ANY(CAST(:ids AS uuid[]))"
+                            ),
+                            {"ids": vault_ids},
+                        )
                     connection.execute(
                         text(
                             "DELETE FROM provider_keys "
-                            "WHERE id = ANY(CAST(:ids AS uuid[]))"
+                            "WHERE brand_id = ANY(CAST(:ids AS uuid[]))"
                         ),
-                        {"ids": key_ids},
+                        {"ids": brand_ids},
                     )
             if brand_ids:
                 with engine.begin() as connection:
@@ -664,3 +678,116 @@ def test_backend_role_has_required_application_and_vault_privileges(
                     text("SELECT has_table_privilege(current_user, :table, 'SELECT')"),
                     {"table": relation},
                 ).scalar_one()
+
+
+def test_provider_key_api_owner_and_hidden_brand_parity(security_fixture):
+    from backend.app.main import app
+
+    fixture = security_fixture
+    nonexistent_brand = str(uuid4())
+    raw_key = f"rls-api-secret-{uuid4().hex}-Q7_W"
+    with TestClient(app) as client:
+        owner_list = client.get(
+            f"/api/v1/brands/{fixture['brand_a']}/keys",
+            headers={"Authorization": f"Bearer {fixture['token_a']}"},
+        )
+        hidden_list = client.get(
+            f"/api/v1/brands/{fixture['brand_a']}/keys",
+            headers={"Authorization": f"Bearer {fixture['token_b']}"},
+        )
+        missing_list = client.get(
+            f"/api/v1/brands/{nonexistent_brand}/keys",
+            headers={"Authorization": f"Bearer {fixture['token_b']}"},
+        )
+        owner_add = client.post(
+            f"/api/v1/brands/{fixture['brand_a']}/keys",
+            headers={
+                "Authorization": f"Bearer {fixture['token_a']}",
+                "Idempotency-Key": str(uuid4()),
+            },
+            json={"provider": "gemini", "key": raw_key, "make_active": False},
+        )
+        hidden_add = client.post(
+            f"/api/v1/brands/{fixture['brand_a']}/keys",
+            headers={
+                "Authorization": f"Bearer {fixture['token_b']}",
+                "Idempotency-Key": str(uuid4()),
+            },
+            json={"provider": "openai", "key": raw_key},
+        )
+        missing_add = client.post(
+            f"/api/v1/brands/{nonexistent_brand}/keys",
+            headers={
+                "Authorization": f"Bearer {fixture['token_b']}",
+                "Idempotency-Key": str(uuid4()),
+            },
+            json={"provider": "openai", "key": raw_key},
+        )
+
+    assert owner_list.status_code == 200
+    assert owner_list.json() == {
+        "keys": [
+            {
+                "id": fixture["key_a"],
+                "provider": "openai",
+                "label": "A",
+                "key_hint": "***a-_1",
+                "is_active": False,
+                "is_valid": None,
+                "last_validated_at": None,
+                "last_validation_error": None,
+                "cleanup_state": "normal",
+                "created_at": owner_list.json()["keys"][0]["created_at"],
+            }
+        ]
+    }
+    assert owner_add.status_code == 201
+    assert owner_add.json()["key_hint"] == "***Q7_W"
+    assert raw_key not in owner_add.text
+    for hidden, missing in ((hidden_list, missing_list), (hidden_add, missing_add)):
+        assert hidden.status_code == missing.status_code == 404
+        assert hidden.json()["error"]["code"] == missing.json()["error"]["code"] == "BRAND_NOT_FOUND"
+        assert hidden.json()["error"]["message"] == missing.json()["error"]["message"] == "Brand not found."
+    assert raw_key not in hidden_add.text + missing_add.text
+
+
+def test_provider_key_data_api_exposes_only_owner_safe_columns(security_fixture):
+    fixture = security_fixture
+    client = fixture["client"]
+
+    def headers(token: str) -> dict[str, str]:
+        return {
+            "apikey": fixture["supabase_key"],
+            "Authorization": f"Bearer {token}",
+        }
+
+    safe_select = (
+        "id,provider,label,key_hint,lifecycle,is_active,is_valid,"
+        "last_validated_at,last_validation_error,created_at"
+    )
+    owner = client.get(
+        f"{fixture['supabase_url']}/rest/v1/provider_keys",
+        headers=headers(fixture["token_a"]),
+        params={"select": safe_select},
+    )
+    non_owner = client.get(
+        f"{fixture['supabase_url']}/rest/v1/provider_keys",
+        headers=headers(fixture["token_b"]),
+        params={"select": safe_select},
+    )
+    internal = client.get(
+        f"{fixture['supabase_url']}/rest/v1/provider_keys",
+        headers=headers(fixture["token_a"]),
+        params={"select": "brand_id,vault_secret_id,validation_token,last_used_at"},
+    )
+    vault = client.get(
+        f"{fixture['supabase_url']}/rest/v1/decrypted_secrets",
+        headers={**headers(fixture["token_a"]), "Accept-Profile": "vault"},
+    )
+
+    assert owner.status_code == 200
+    assert [row["id"] for row in owner.json()] == [fixture["key_a"]]
+    assert non_owner.status_code == 200
+    assert all(row["id"] != fixture["key_a"] for row in non_owner.json())
+    assert internal.status_code in {400, 401, 403}
+    assert vault.status_code in {400, 401, 403, 404, 406}
