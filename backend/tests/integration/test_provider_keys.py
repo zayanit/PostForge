@@ -4,6 +4,7 @@ import asyncio
 import os
 import threading
 import time
+from collections.abc import Container
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -17,6 +18,13 @@ from sqlalchemy.exc import (
     SQLAlchemyError,
     TimeoutError as SQLAlchemyTimeoutError,
 )
+
+
+def _assert_not_exposed(
+    observable: Container[str], *prohibited_values: str
+) -> None:
+    if any(value in observable for value in prohibited_values):
+        raise AssertionError("sensitive value was exposed")
 
 
 class SecretFixture(str):
@@ -279,8 +287,7 @@ def test_real_vault_add_list_activation_idempotency_and_retired_receipt(
         ("gemini", gemini.json()["id"]),
     ]
     serialized = "".join(response.text for response in (first, gemini, replacement, retry, listed))
-    for raw_key in (openai_key, gemini_key, replacement_key):
-        assert raw_key not in serialized
+    _assert_not_exposed(serialized, openai_key, gemini_key, replacement_key)
 
     engine = fixture["engine"]
     with engine.connect() as connection:

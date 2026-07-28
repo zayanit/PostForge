@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
@@ -24,6 +24,21 @@ class BrandCleanupRequiredError(Exception):
 
 class BrandMutationInProgressError(Exception):
     pass
+
+
+class BrandAssetOperationStaleError(Exception):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class BrandAssetOperation:
+    id: UUID
+    brand_id: UUID
+    operation: str
+    object_path: str | None
+    previous_path: str | None
+    state: str
+    remote_status: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,113 +186,271 @@ class BrandStore:
 
     def get_logo_path(self, user_id: str, brand_id: UUID) -> str | None:
         with self.engine.begin() as connection:
-            row = self.lock_owned_brand_without_asset_operation(
-                connection, user_id, brand_id
-            )
+            row = self.lock_owned_brand_for_mutation(connection, user_id, brand_id)
         return row["logo_path"]
 
-    def begin_brand_cleanup(self, user_id: str, brand_id: UUID) -> str | None:
+    def get_asset_operation(
+        self, user_id: str, brand_id: UUID
+    ) -> BrandAssetOperation | None:
         with self.engine.begin() as connection:
-            row = self.lock_owned_brand(connection, user_id, brand_id)
-            self.require_no_asset_operation(connection, brand_id)
-            if row["deletion_state"] == "active":
-                row = connection.execute(
-                    text(
-                        """
-                        UPDATE brands
-                        SET deletion_state = 'cleanup_required'
-                        WHERE id = :brand_id AND owner_user_id = :owner_user_id
-                        RETURNING id, name, logo_path, deletion_state, created_at
-                        """
-                    ),
-                    {"brand_id": brand_id, "owner_user_id": user_id},
-                ).mappings().one_or_none()
+            self.lock_owned_brand(connection, user_id, brand_id)
+            connection.execute(
+                text(
+                    """
+                    UPDATE brand_asset_operations
+                    SET state = 'cleanup_required', remote_status = 'unknown'
+                    WHERE brand_id = :brand_id AND remote_status = 'pending'
+                      AND started_at < clock_timestamp() - interval '5 minutes'
+                    """
+                ),
+                {"brand_id": brand_id},
+            )
+            row = connection.execute(
+                text(
+                    """
+                    SELECT id, brand_id, operation, object_path, previous_path,
+                           state, remote_status
+                    FROM brand_asset_operations
+                    WHERE brand_id = :brand_id
+                    FOR UPDATE
+                    """
+                ),
+                {"brand_id": brand_id},
+            ).mappings().one_or_none()
+        return BrandAssetOperation(**row) if row is not None else None
 
-            if row is None:
-                raise LookupError("Brand not found.")
-            return row["logo_path"]
-
-    def update_logo_path(
-        self,
-        user_id: str,
-        brand_id: UUID,
-        logo_path: str | None,
-    ) -> Brand:
+    def begin_logo_upload(
+        self, user_id: str, brand_id: UUID, extension: str
+    ) -> BrandAssetOperation:
+        operation_id = uuid4()
+        object_path = f"brands/{brand_id}/logos/{operation_id}.{extension}"
         with self.engine.begin() as connection:
-            self.lock_owned_brand_without_asset_operation(
+            brand = self.lock_owned_brand_without_asset_operation(
                 connection, user_id, brand_id
             )
             row = connection.execute(
                 text(
                     """
-                    UPDATE brands
-                    SET logo_path = :logo_path
-                    WHERE id = :brand_id AND owner_user_id = :owner_user_id
-                    RETURNING id, name, logo_path, deletion_state, created_at
+                    INSERT INTO brand_asset_operations (
+                        id, brand_id, operation, object_path, previous_path,
+                        state, remote_status
+                    ) VALUES (
+                        :id, :brand_id, 'upload', :object_path, :previous_path,
+                        'in_progress', 'pending'
+                    )
+                    RETURNING id, brand_id, operation, object_path, previous_path,
+                              state, remote_status
                     """
                 ),
                 {
+                    "id": operation_id,
                     "brand_id": brand_id,
-                    "owner_user_id": user_id,
-                    "logo_path": logo_path,
+                    "object_path": object_path,
+                    "previous_path": brand["logo_path"],
                 },
-            ).mappings().one_or_none()
+            ).mappings().one()
+        return BrandAssetOperation(**row)
 
-        if row is None:
-            raise LookupError("Brand not found.")
-        return self._to_brand(row)
-
-    def mark_cleanup_required(self, user_id: str, brand_id: UUID) -> Brand:
+    def begin_logo_remove(
+        self, user_id: str, brand_id: UUID
+    ) -> BrandAssetOperation | None:
+        operation_id = uuid4()
         with self.engine.begin() as connection:
-            current = self.lock_owned_brand(connection, user_id, brand_id)
-            self.require_no_asset_operation(connection, brand_id)
-            if current["deletion_state"] == "cleanup_required":
-                return self._to_brand(current)
+            brand = self.lock_owned_brand_without_asset_operation(
+                connection, user_id, brand_id
+            )
+            if brand["logo_path"] is None:
+                return None
             row = connection.execute(
                 text(
                     """
-                    UPDATE brands
-                    SET deletion_state = 'cleanup_required'
-                    WHERE id = :brand_id AND owner_user_id = :owner_user_id
+                    INSERT INTO brand_asset_operations (
+                        id, brand_id, operation, object_path, previous_path,
+                        state, remote_status
+                    ) VALUES (
+                        :id, :brand_id, 'remove', :object_path, NULL,
+                        'in_progress', 'pending'
+                    )
+                    RETURNING id, brand_id, operation, object_path, previous_path,
+                              state, remote_status
+                    """
+                ),
+                {
+                    "id": operation_id,
+                    "brand_id": brand_id,
+                    "object_path": brand["logo_path"],
+                },
+            ).mappings().one()
+        return BrandAssetOperation(**row)
+
+    @staticmethod
+    def _lock_operation(
+        connection: Connection, brand_id: UUID, operation_id: UUID
+    ) -> Mapping[str, Any]:
+        operation = connection.execute(
+            text(
+                """
+                SELECT id, brand_id, operation, object_path, previous_path,
+                       state, remote_status
+                FROM brand_asset_operations
+                WHERE brand_id = :brand_id AND id = :operation_id
+                FOR UPDATE
+                """
+            ),
+            {"brand_id": brand_id, "operation_id": operation_id},
+        ).mappings().one_or_none()
+        if operation is None:
+            raise BrandAssetOperationStaleError
+        return operation
+
+    def record_asset_remote_status(
+        self,
+        user_id: str,
+        brand_id: UUID,
+        operation_id: UUID,
+        remote_status: str,
+    ) -> None:
+        if remote_status not in {"succeeded", "failed", "unknown"}:
+            raise ValueError("Invalid remote status.")
+        with self.engine.begin() as connection:
+            self.lock_owned_brand(connection, user_id, brand_id)
+            self._lock_operation(connection, brand_id, operation_id)
+            connection.execute(
+                text(
+                    """
+                    UPDATE brand_asset_operations
+                    SET remote_status = :remote_status,
+                        state = CASE WHEN :remote_status = 'succeeded'
+                                     THEN state ELSE 'cleanup_required' END
+                    WHERE id = :operation_id
+                    """
+                ),
+                {"operation_id": operation_id, "remote_status": remote_status},
+            )
+
+    def abandon_definitive_asset_failure(
+        self, user_id: str, brand_id: UUID, operation_id: UUID
+    ) -> None:
+        with self.engine.begin() as connection:
+            self.lock_owned_brand(connection, user_id, brand_id)
+            operation = self._lock_operation(connection, brand_id, operation_id)
+            if operation["remote_status"] != "failed":
+                raise BrandAssetOperationStaleError
+            connection.execute(
+                text("DELETE FROM brand_asset_operations WHERE id = :operation_id"),
+                {"operation_id": operation_id},
+            )
+
+    def mark_asset_cleanup_required(
+        self, user_id: str, brand_id: UUID, operation_id: UUID
+    ) -> None:
+        with self.engine.begin() as connection:
+            self.lock_owned_brand(connection, user_id, brand_id)
+            operation = self._lock_operation(connection, brand_id, operation_id)
+            if operation["remote_status"] != "succeeded":
+                raise BrandAssetOperationStaleError
+            connection.execute(
+                text(
+                    "UPDATE brand_asset_operations SET state = 'cleanup_required' "
+                    "WHERE id = :operation_id"
+                ),
+                {"operation_id": operation_id},
+            )
+
+    def publish_uploaded_logo(
+        self, user_id: str, brand_id: UUID, operation_id: UUID
+    ) -> Brand:
+        with self.engine.begin() as connection:
+            brand = self.lock_owned_brand_for_mutation(connection, user_id, brand_id)
+            operation = self._lock_operation(connection, brand_id, operation_id)
+            if (
+                operation["operation"] != "upload"
+                or operation["remote_status"] != "succeeded"
+            ):
+                raise BrandAssetOperationStaleError
+            row = connection.execute(
+                text(
+                    """
+                    UPDATE brands SET logo_path = :logo_path
+                    WHERE id = :brand_id AND deletion_state = 'active'
                     RETURNING id, name, logo_path, deletion_state, created_at
                     """
                 ),
-                {"brand_id": brand_id, "owner_user_id": user_id},
+                {"brand_id": brand_id, "logo_path": operation["object_path"]},
             ).mappings().one_or_none()
-
-        if row is None:
-            raise LookupError("Brand not found.")
+            if row is None:
+                raise BrandAssetOperationStaleError
         return self._to_brand(row)
 
-    def delete_brand_after_cleanup(self, user_id: str, brand_id: UUID) -> None:
+    def complete_asset_operation(
+        self, user_id: str, brand_id: UUID, operation_id: UUID
+    ) -> None:
         with self.engine.begin() as connection:
-            current = self.lock_owned_brand(connection, user_id, brand_id)
-            self.require_no_asset_operation(connection, brand_id)
-            if current["deletion_state"] != "cleanup_required":
-                raise BrandCleanupRequiredError
-            has_provider_keys = connection.execute(
+            brand = self.lock_owned_brand_for_mutation(connection, user_id, brand_id)
+            operation = self._lock_operation(connection, brand_id, operation_id)
+            if operation["remote_status"] != "succeeded":
+                raise BrandAssetOperationStaleError
+            if operation["operation"] == "upload":
+                if brand["logo_path"] != operation["object_path"]:
+                    raise BrandAssetOperationStaleError
+            elif brand["logo_path"] != operation["object_path"]:
+                raise BrandAssetOperationStaleError
+            else:
+                connection.execute(
+                    text("UPDATE brands SET logo_path = NULL WHERE id = :brand_id"),
+                    {"brand_id": brand_id},
+                )
+            connection.execute(
+                text("DELETE FROM brand_asset_operations WHERE id = :operation_id"),
+                {"operation_id": operation_id},
+            )
+
+    def mark_abandoned_asset_operations_unknown(self, brand_id: UUID) -> int:
+        with self.engine.begin() as connection:
+            result = connection.execute(
                 text(
-                    "SELECT EXISTS ("
-                    "SELECT 1 FROM provider_keys WHERE brand_id = :brand_id"
-                    ")"
+                    """
+                    UPDATE brand_asset_operations
+                    SET state = 'cleanup_required', remote_status = 'unknown'
+                    WHERE brand_id = :brand_id AND remote_status = 'pending'
+                      AND started_at < clock_timestamp() - interval '5 minutes'
+                    """
                 ),
                 {"brand_id": brand_id},
-            ).scalar_one()
-            if has_provider_keys:
-                raise BrandCleanupRequiredError
-            deleted_id = connection.execute(
+            )
+        return result.rowcount
+
+    def fence_brand_for_deletion(
+        self, user_id: str, brand_id: UUID, confirm_name: str
+    ) -> None:
+        with self.engine.begin() as connection:
+            brand = self.lock_owned_brand(connection, user_id, brand_id)
+            if brand["name"] != confirm_name:
+                raise ValueError("Confirmation mismatch.")
+            self.require_no_asset_operation(connection, brand_id)
+            connection.execute(
                 text(
                     """
-                    DELETE FROM brands
-                    WHERE id = :brand_id AND owner_user_id = :owner_user_id
-                    RETURNING id
+                    UPDATE brands SET deletion_state = 'cleanup_required'
+                    WHERE id = :brand_id AND deletion_state = 'active'
                     """
                 ),
-                {"brand_id": brand_id, "owner_user_id": user_id},
-            ).scalar_one_or_none()
+                {"brand_id": brand_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE provider_keys
+                    SET lifecycle = 'cleanup_required', is_active = false,
+                        is_valid = NULL, last_validated_at = NULL,
+                        last_validation_error = NULL, validation_token = NULL,
+                        validation_lease_expires_at = NULL
+                    WHERE brand_id = :brand_id
+                    """
+                ),
+                {"brand_id": brand_id},
+            )
 
-        if deleted_id is None:
-            raise LookupError("Brand not found.")
 
 @lru_cache(maxsize=1)
 def get_brand_store() -> BrandStore:

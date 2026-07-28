@@ -276,6 +276,101 @@ class ProviderKeyStore:
                 raise KeyActivationConflictError from exc
             raise
 
+    def delete_key(self, user_id: str, brand_id: UUID, key_id: UUID) -> None:
+        try:
+            with self.engine.begin() as connection:
+                brand = BrandStore.lock_owned_brand(connection, user_id, brand_id)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT vault_secret_id, lifecycle
+                        FROM provider_keys
+                        WHERE brand_id = :brand_id AND id = :key_id
+                        FOR UPDATE
+                        """
+                    ),
+                    {"brand_id": brand_id, "key_id": key_id},
+                ).mappings().one_or_none()
+                if row is None:
+                    raise LookupError("Provider key not found.")
+
+                # Resolve path membership before exposing whole-brand cleanup state.
+                if brand["deletion_state"] != "active":
+                    raise BrandCleanupRequiredError
+                if row["lifecycle"] == "normal":
+                    connection.execute(
+                        text(
+                            """
+                            UPDATE provider_keys
+                            SET lifecycle = 'cleanup_required', is_active = false,
+                                is_valid = NULL, last_validated_at = NULL,
+                                last_validation_error = NULL,
+                                validation_token = NULL,
+                                validation_lease_expires_at = NULL
+                            WHERE id = :key_id
+                            """
+                        ),
+                        {"key_id": key_id},
+                    )
+        except (LookupError, BrandCleanupRequiredError):
+            raise
+        except SQLAlchemyError as exc:
+            raise KeyCleanupRequiredError from exc
+
+        try:
+            with self.engine.begin() as connection:
+                brand = BrandStore.lock_owned_brand(connection, user_id, brand_id)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT vault_secret_id, lifecycle
+                        FROM provider_keys
+                        WHERE brand_id = :brand_id AND id = :key_id
+                        FOR UPDATE
+                        """
+                    ),
+                    {"brand_id": brand_id, "key_id": key_id},
+                ).mappings().one_or_none()
+                if row is None:
+                    raise LookupError("Provider key not found.")
+                if brand["deletion_state"] != "active":
+                    raise BrandCleanupRequiredError
+                if row["lifecycle"] != "cleanup_required":
+                    raise KeyCleanupRequiredError
+
+                connection.execute(
+                    text(
+                        """
+                        UPDATE provider_key_idempotency
+                        SET state = 'deleted', provider_key_id = NULL
+                        WHERE provider_key_id = :key_id
+                        """
+                    ),
+                    {"key_id": key_id},
+                )
+                connection.execute(
+                    text("DELETE FROM vault.secrets WHERE id = :vault_secret_id"),
+                    {"vault_secret_id": row["vault_secret_id"]},
+                )
+                deleted = connection.execute(
+                    text(
+                        "DELETE FROM provider_keys "
+                        "WHERE id = :key_id AND lifecycle = 'cleanup_required'"
+                    ),
+                    {"key_id": key_id},
+                )
+                if deleted.rowcount != 1:
+                    raise KeyCleanupRequiredError
+        except (
+            LookupError,
+            BrandCleanupRequiredError,
+            KeyCleanupRequiredError,
+        ):
+            raise
+        except SQLAlchemyError as exc:
+            # The first transaction remains committed as the durable retry anchor.
+            raise KeyCleanupRequiredError from exc
+
     def claim_validation(
         self,
         user_id: str,

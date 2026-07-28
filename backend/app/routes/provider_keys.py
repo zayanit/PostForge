@@ -112,6 +112,26 @@ def _activation_error(exc: Exception) -> HTTPException:
     )
 
 
+def _deletion_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, LookupError):
+        return _error(
+            status.HTTP_404_NOT_FOUND,
+            "PROVIDER_KEY_NOT_FOUND",
+            "Provider key not found.",
+        )
+    if isinstance(exc, BrandCleanupRequiredError):
+        return _error(
+            status.HTTP_409_CONFLICT,
+            "BRAND_CLEANUP_REQUIRED",
+            "Brand cleanup is required. Retry deletion.",
+        )
+    return _error(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "KEY_CLEANUP_REQUIRED",
+        "Key cleanup did not complete. Retry deletion.",
+    )
+
+
 async def _within_deadline(awaitable: Awaitable[_T], deadline: float) -> _T:
     remaining = max(0.0, deadline - time.monotonic())
     return await asyncio.wait_for(awaitable, timeout=remaining)
@@ -267,6 +287,42 @@ def activate_provider_key(
         },
     )
     return key
+
+
+@router.delete(
+    "/{brand_id}/keys/{key_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_provider_key(
+    request: Request,
+    brand_id: UUID,
+    key_id: UUID,
+    current_user: CurrentUserDep,
+    provider_key_store: ProviderKeyStoreDep,
+) -> None:
+    try:
+        provider_key_store.delete_key(current_user.user_id, brand_id, key_id)
+    except (
+        LookupError,
+        BrandCleanupRequiredError,
+        KeyCleanupRequiredError,
+    ) as exc:
+        logger.warning(
+            "provider_keys.delete_retry",
+            extra={
+                "event": "provider_keys.delete_retry",
+                "request_id": getattr(request.state, "request_id", "unknown"),
+            },
+        )
+        raise _deletion_error(exc) from exc
+
+    logger.info(
+        "provider_keys.delete_success",
+        extra={
+            "event": "provider_keys.delete_success",
+            "request_id": getattr(request.state, "request_id", "unknown"),
+        },
+    )
 
 
 @router.post(

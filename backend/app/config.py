@@ -12,13 +12,16 @@ _DATABASE_TIMEOUT_SECONDS = 2
 _DATABASE_TIMEOUT_MILLISECONDS = _DATABASE_TIMEOUT_SECONDS * 1000
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Settings:
     supabase_url: str
     supabase_secret_key: str
     supabase_jwt_secret: str
     database_url: str | None = None
     allowed_origins: tuple[str, ...] = ()
+
+    def __repr__(self) -> str:
+        return "<Settings redacted>"
 
 
 def load_settings() -> Settings:

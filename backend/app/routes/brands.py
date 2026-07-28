@@ -8,12 +8,20 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, 
 
 from ..auth import CurrentUserDep
 from ..models.brand import Brand, BrandCreate, BrandDelete, BrandListResponse
+from ..services.brand_deletion import (
+    BrandConfirmationMismatchError,
+    BrandDeletion,
+    BrandDeletionCleanupError,
+    get_brand_deletion,
+)
 from ..services.brand_storage import (
     BrandStorage,
     BrandStorageError,
+    BrandStorageUnknownError,
     get_brand_storage,
 )
 from ..services.brand_store import (
+    BrandAssetOperationStaleError,
     BrandCleanupRequiredError,
     BrandMutationInProgressError,
     BrandNameTakenError,
@@ -27,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 BrandStoreDep = Annotated[BrandStore, Depends(get_brand_store)]
 BrandStorageDep = Annotated[BrandStorage, Depends(get_brand_storage)]
+BrandDeletionDep = Annotated[BrandDeletion, Depends(get_brand_deletion)]
 
 MAX_LOGO_BYTES = 5 * 1024 * 1024
 LOGO_TYPES = {
@@ -96,7 +105,7 @@ def _mutation_in_progress() -> HTTPException:
 def _mutation_error(exc: Exception) -> HTTPException:
     if isinstance(exc, BrandCleanupRequiredError):
         return _cleanup_required()
-    if isinstance(exc, BrandMutationInProgressError):
+    if isinstance(exc, (BrandMutationInProgressError, BrandAssetOperationStaleError)):
         return _mutation_in_progress()
     return _not_found()
 
@@ -139,6 +148,31 @@ def _has_valid_signature(content_type: str, data: bytes) -> bool:
     if content_type == "image/webp":
         return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
     return False
+
+
+async def _reconcile_asset_operation(
+    user_id: str,
+    brand_id: UUID,
+    brand_store: BrandStore,
+    brand_storage: BrandStorage,
+) -> None:
+    operation = brand_store.get_asset_operation(user_id, brand_id)
+    if operation is None:
+        return
+    if operation.remote_status == "failed":
+        brand_store.abandon_definitive_asset_failure(
+            user_id, brand_id, operation.id
+        )
+        return
+    if operation.remote_status != "succeeded":
+        raise BrandMutationInProgressError
+    if operation.operation == "upload" and operation.previous_path:
+        try:
+            await brand_storage.delete_logo(operation.previous_path)
+        except BrandStorageError as exc:
+            brand_store.mark_asset_cleanup_required(user_id, brand_id, operation.id)
+            raise _storage_unavailable() from exc
+    brand_store.complete_asset_operation(user_id, brand_id, operation.id)
 
 
 @router.get("", response_model=BrandListResponse)
@@ -207,48 +241,30 @@ async def delete_brand(
     request: Request,
     brand_id: UUID,
     current_user: CurrentUserDep,
-    brand_store: BrandStoreDep,
-    brand_storage: BrandStorageDep,
+    brand_deletion: BrandDeletionDep,
     payload: BrandDelete | None = None,
 ) -> Response:
+    if payload is None:
+        raise _confirmation_mismatch()
     try:
-        brand = brand_store.get_brand(current_user.user_id, brand_id)
+        await brand_deletion.delete(
+            current_user.user_id, brand_id, payload.confirm_name
+        )
     except LookupError as exc:
         raise _not_found() from exc
-
-    if payload is None or payload.confirm_name != brand.name:
-        raise _confirmation_mismatch()
-
-    try:
-        logo_path = brand_store.begin_brand_cleanup(current_user.user_id, brand_id)
-    except (
-        LookupError,
-        BrandCleanupRequiredError,
-        BrandMutationInProgressError,
-    ) as exc:
-        raise _mutation_error(exc) from exc
-
-    if logo_path:
-        try:
-            await brand_storage.delete_logo(logo_path)
-        except BrandStorageError as exc:
-            logger.warning(
-                "brands.delete_logo_cleanup_failed",
-                extra={
-                    "event": "brands.delete_logo_cleanup_failed",
-                    "request_id": getattr(request.state, "request_id", "unknown"),
-                },
-            )
-            raise _cleanup_failed() from exc
-
-    try:
-        brand_store.delete_brand_after_cleanup(current_user.user_id, brand_id)
-    except (
-        LookupError,
-        BrandCleanupRequiredError,
-        BrandMutationInProgressError,
-    ) as exc:
-        raise _mutation_error(exc) from exc
+    except BrandConfirmationMismatchError as exc:
+        raise _confirmation_mismatch() from exc
+    except BrandMutationInProgressError as exc:
+        raise _mutation_in_progress() from exc
+    except BrandDeletionCleanupError as exc:
+        logger.warning(
+            "brands.delete_cleanup_failed",
+            extra={
+                "event": "brands.delete_cleanup_failed",
+                "request_id": getattr(request.state, "request_id", "unknown"),
+            },
+        )
+        raise _cleanup_failed() from exc
 
     logger.info(
         "brands.delete_success",
@@ -270,12 +286,19 @@ async def upload_brand_logo(
     file: Annotated[UploadFile, File()],
 ) -> Brand:
     try:
-        old_path = brand_store.get_logo_path(current_user.user_id, brand_id)
+        brand_store.get_logo_path(current_user.user_id, brand_id)
     except (
         LookupError,
         BrandCleanupRequiredError,
         BrandMutationInProgressError,
     ) as exc:
+        raise _mutation_error(exc) from exc
+
+    try:
+        await _reconcile_asset_operation(
+            current_user.user_id, brand_id, brand_store, brand_storage
+        )
+    except (BrandMutationInProgressError, BrandAssetOperationStaleError) as exc:
         raise _mutation_error(exc) from exc
 
     content_type = file.content_type or ""
@@ -294,48 +317,67 @@ async def upload_brand_logo(
     if not _has_valid_signature(content_type, data):
         raise _unsupported_media_type()
 
-    new_path = f"brands/{brand_id}/logo.{extension}"
     try:
-        await brand_storage.upload_logo(new_path, data, content_type)
+        operation = brand_store.begin_logo_upload(
+            current_user.user_id, brand_id, extension
+        )
+    except (
+        LookupError,
+        BrandCleanupRequiredError,
+        BrandMutationInProgressError,
+    ) as exc:
+        raise _mutation_error(exc) from exc
+
+    assert operation.object_path is not None
+    try:
+        await brand_storage.upload_logo(operation.object_path, data, content_type)
+    except BrandStorageUnknownError as exc:
+        brand_store.record_asset_remote_status(
+            current_user.user_id, brand_id, operation.id, "unknown"
+        )
+        raise _storage_unavailable() from exc
     except BrandStorageError as exc:
+        brand_store.record_asset_remote_status(
+            current_user.user_id, brand_id, operation.id, "failed"
+        )
+        brand_store.abandon_definitive_asset_failure(
+            current_user.user_id, brand_id, operation.id
+        )
         raise _storage_unavailable() from exc
 
     try:
-        brand = brand_store.update_logo_path(
-            current_user.user_id,
-            brand_id,
-            new_path,
+        brand_store.record_asset_remote_status(
+            current_user.user_id, brand_id, operation.id, "succeeded"
         )
-    except Exception as exc:
-        if new_path != old_path:
-            try:
-                await brand_storage.delete_logo(new_path)
-            except BrandStorageError:
-                logger.warning(
-                    "brands.logo_rollback_failed",
-                    extra={
-                        "event": "brands.logo_rollback_failed",
-                        "request_id": getattr(request.state, "request_id", "unknown"),
-                    },
-                )
-        if isinstance(
-            exc,
-            (LookupError, BrandCleanupRequiredError, BrandMutationInProgressError),
-        ):
-            raise _mutation_error(exc) from exc
-        raise
+        brand = brand_store.publish_uploaded_logo(
+            current_user.user_id, brand_id, operation.id
+        )
+    except (
+        LookupError,
+        BrandCleanupRequiredError,
+        BrandAssetOperationStaleError,
+    ) as exc:
+        raise _mutation_error(exc) from exc
 
-    if old_path and old_path != new_path:
+    if operation.previous_path:
         try:
-            await brand_storage.delete_logo(old_path)
-        except BrandStorageError:
-            logger.warning(
-                "brands.logo_cleanup_failed",
-                extra={
-                    "event": "brands.logo_cleanup_failed",
-                    "request_id": getattr(request.state, "request_id", "unknown"),
-                },
+            await brand_storage.delete_logo(operation.previous_path)
+        except BrandStorageError as exc:
+            brand_store.mark_asset_cleanup_required(
+                current_user.user_id, brand_id, operation.id
             )
+            raise _storage_unavailable() from exc
+
+    try:
+        brand_store.complete_asset_operation(
+            current_user.user_id, brand_id, operation.id
+        )
+    except (
+        LookupError,
+        BrandCleanupRequiredError,
+        BrandAssetOperationStaleError,
+    ) as exc:
+        raise _mutation_error(exc) from exc
 
     logger.info(
         "brands.logo_upload_success",
@@ -356,7 +398,11 @@ async def delete_brand_logo(
     brand_storage: BrandStorageDep,
 ) -> Response:
     try:
-        old_path = brand_store.get_logo_path(current_user.user_id, brand_id)
+        brand_store.get_logo_path(current_user.user_id, brand_id)
+        await _reconcile_asset_operation(
+            current_user.user_id, brand_id, brand_store, brand_storage
+        )
+        operation = brand_store.begin_logo_remove(current_user.user_id, brand_id)
     except (
         LookupError,
         BrandCleanupRequiredError,
@@ -364,27 +410,39 @@ async def delete_brand_logo(
     ) as exc:
         raise _mutation_error(exc) from exc
 
-    if old_path is None:
+    if operation is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    assert operation.object_path is not None
     try:
-        brand_store.update_logo_path(current_user.user_id, brand_id, None)
+        await brand_storage.delete_logo(operation.object_path)
+    except BrandStorageUnknownError as exc:
+        brand_store.record_asset_remote_status(
+            current_user.user_id, brand_id, operation.id, "unknown"
+        )
+        raise _storage_unavailable() from exc
+    except BrandStorageError as exc:
+        brand_store.record_asset_remote_status(
+            current_user.user_id, brand_id, operation.id, "failed"
+        )
+        brand_store.abandon_definitive_asset_failure(
+            current_user.user_id, brand_id, operation.id
+        )
+        raise _storage_unavailable() from exc
+
+    brand_store.record_asset_remote_status(
+        current_user.user_id, brand_id, operation.id, "succeeded"
+    )
+    try:
+        brand_store.complete_asset_operation(
+            current_user.user_id, brand_id, operation.id
+        )
     except (
         LookupError,
         BrandCleanupRequiredError,
-        BrandMutationInProgressError,
+        BrandAssetOperationStaleError,
     ) as exc:
         raise _mutation_error(exc) from exc
-    try:
-        await brand_storage.delete_logo(old_path)
-    except BrandStorageError:
-        logger.warning(
-            "brands.logo_cleanup_failed",
-            extra={
-                "event": "brands.logo_cleanup_failed",
-                "request_id": getattr(request.state, "request_id", "unknown"),
-            },
-        )
 
     logger.info(
         "brands.logo_delete_success",

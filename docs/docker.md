@@ -7,7 +7,7 @@ container. Run every local command from the repository root.
 
 - Docker with the BuildKit builder running.
 - A reachable Supabase project and its project URL, publishable key, secret key, JWT
-  secret, and PostgreSQL connection string.
+  secret, and a private backend PostgreSQL connection as described below.
 - For Bunny deployment, an image repository in Docker Hub or GitHub Container Registry
   and access to the [bunny.net dashboard](https://dash.bunny.net/).
 
@@ -43,7 +43,7 @@ Git and Docker; do not commit it.
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SECRET_KEY=replace-with-secret-key
 SUPABASE_JWT_SECRET=replace-with-jwt-secret
-DATABASE_URL=postgresql://user:password@host:5432/database
+DATABASE_URL=replace-with-private-backend-connection-string
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=replace-with-publishable-key
 NEXT_PUBLIC_API_URL=/api
@@ -97,7 +97,7 @@ credentials remain server-side.
 | `SUPABASE_URL` | Backend | Supabase API URL reachable from inside the container |
 | `SUPABASE_SECRET_KEY` | Backend | Supabase secret/service-role credential; keep secret |
 | `SUPABASE_JWT_SECRET` | Backend | JWT verification secret; keep secret |
-| `DATABASE_URL` | Backend | PostgreSQL connection string reachable from inside the container; keep credentials secret |
+| `DATABASE_URL` | Backend | Private, non-client PostgreSQL login reachable from the container; keep the entire value secret |
 | `NEXT_PUBLIC_SUPABASE_URL` | Browser | Supabase API URL reachable from each user's browser |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Browser | Supabase publishable key; public by design |
 | `NEXT_PUBLIC_API_URL` | Browser | `/api` for same-origin backend access through Next.js |
@@ -108,6 +108,50 @@ public HTTPS URL. For local Supabase on Docker Desktop, the backend needs a host
 such as `http://host.docker.internal:54321`, while the browser needs
 `http://localhost:54321`. On Linux, add
 `--add-host=host.docker.internal:host-gateway` to `docker run` when using that hostname.
+
+### Hosted database role
+
+`DATABASE_URL` is used directly by SQLAlchemy; `SUPABASE_SECRET_KEY` does not grant its
+database privileges. Before deployment, have a database administrator create a private
+login that is not `anon`, `authenticated`, or `service_role`. The hosted login must be a
+non-superuser with `BYPASSRLS`, because table ownership does not bypass forced RLS. The
+local `postgres` superuser is accepted only for a loopback local-development database.
+
+The login requires `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on `brands`,
+`provider_keys`, `provider_key_idempotency`, and `brand_asset_operations`. Its Vault
+capabilities must be exactly those used by the backend:
+
+- `USAGE` on schema `vault`.
+- `EXECUTE` on `vault.create_secret(text,text,text,uuid)`.
+- Column `SELECT` on `id` and `decrypted_secret` in `vault.decrypted_secrets`.
+- Column `SELECT` on `id`, plus `DELETE`, on `vault.secrets`.
+- No Vault schema `CREATE`, `vault.update_secret(...)` execution, or table-wide Vault
+  `SELECT`.
+
+Apply the provider-key migration before starting the container. Every backend startup
+checks the connected role's identity, forced-RLS bypass, application DML, and Vault
+least-privilege capabilities; a mismatch stops the backend before it serves requests.
+Do not place `DATABASE_URL` in a `NEXT_PUBLIC_*` variable, browser configuration, image,
+log, ticket, or command output.
+
+### Provider validation egress
+
+Allow direct outbound HTTPS (TCP 443, including DNS and TLS) only as needed for these
+official read-only model-list requests:
+
+- OpenAI: `GET https://api.openai.com/v1/models`.
+- Gemini: `GET https://generativelanguage.googleapis.com/v1beta/models?pageSize=1`.
+
+Validation does not follow redirects, use provider SDKs, or generate content. If an
+egress policy filters by hostname, allow `api.openai.com` and
+`generativelanguage.googleapis.com`; do not add alternate or redirect hosts.
+
+For a real validation check, create disposable keys in dedicated provider projects with
+only the access needed to list models. Enter them through the PostForge UI, never through
+source files, environment files, shell arguments/history, screenshots, fixtures, logs,
+or tickets. Revoke them at the provider immediately after the check and verify they do
+not appear in browser responses or application logs. A provider outage or temporary
+validation result blocks the check; it is not a passing result.
 
 Rotate a leaked credential at its source, update `.env.docker` or the hosting platform's
 runtime variables, and replace the running container. Rebuilding the image is neither
@@ -201,6 +245,16 @@ return a non-2xx response. Confirm every name in **Configuration & Secrets** is 
 then replace the container. Do not print secret values into shared logs or tickets. If
 both local probes pass but sign-in fails, check Supabase and database connectivity
 separately; external services are deliberately outside the container healthcheck.
+
+If logs report `database role lacks required backend privileges`, do not bypass the
+startup check or substitute a client/service role. Confirm `DATABASE_URL` reaches the
+intended database as the intended private login, migration `00016` is applied, and the
+role has every forced-RLS, application, and Vault capability in **Hosted database role**
+without broader Vault access. Have a database administrator correct the role, rotate the
+connection credential if it was exposed while diagnosing, and replace the container.
+Provider validation failures with an otherwise healthy app should be checked against the
+two required outbound hosts; never log request headers, keys, or provider response bodies
+while testing egress.
 
 ### Port 3000 is already allocated
 

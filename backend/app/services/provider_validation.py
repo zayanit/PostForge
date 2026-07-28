@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import re
+import hashlib
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -27,7 +27,6 @@ _GEMINI_INVALID_REASONS = frozenset(
         "INVALID_CREDENTIAL",
     }
 )
-_SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9._:/-]{1,200}\Z")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -69,9 +68,10 @@ def _result(
 
 def _request_id(response: httpx.Response, raw_key: str) -> str | None:
     value = response.headers.get("x-request-id")
-    if value is None or raw_key in value or _SAFE_REQUEST_ID.fullmatch(value) is None:
+    if value is None or raw_key in value or len(value) > 512:
         return None
-    return value
+    # Provider headers are untrusted. Preserve correlation without logging raw content.
+    return f"sha256:{hashlib.sha256(value.encode()).hexdigest()[:16]}"
 
 
 def _is_openai_invalid(body: object) -> bool:

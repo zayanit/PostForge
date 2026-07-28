@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Container
 
 import httpx
 import pytest
@@ -15,6 +17,13 @@ GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1"
 )
 RAW_KEY = "unit-test-provider-secret-A1B2"
+
+
+def _assert_not_exposed(
+    observable: Container[str], *prohibited_values: str
+) -> None:
+    if any(value in observable for value in prohibited_values):
+        raise AssertionError("sensitive value was exposed")
 
 
 def _validate(
@@ -92,12 +101,13 @@ def test_uses_exact_official_models_url_and_only_provider_auth_header(
     request = requests[0]
     assert request.method == "GET"
     assert str(request.url) == expected_url
-    assert request.headers[auth_header[0]] == auth_header[1]
+    assert hmac.compare_digest(request.headers[auth_header[0]], auth_header[1])
     assert ("x-goog-api-key" in request.headers) is (provider == "gemini")
     assert ("authorization" in request.headers) is (provider == "openai")
-    assert "openai-organization" not in request.headers
-    assert "openai-project" not in request.headers
-    assert RAW_KEY not in str(request.url)
+    _assert_not_exposed(
+        request.headers, "openai-organization", "openai-project"
+    )
+    _assert_not_exposed(str(request.url), RAW_KEY)
     _assert_result(
         result,
         "valid",
@@ -452,7 +462,7 @@ def test_extracts_provider_request_id_only_from_response_header(provider: str):
         "valid",
         "VALID",
         f"{'OpenAI' if provider == 'openai' else 'Gemini'} accepted this API key.",
-        "provider-request-123",
+        f"sha256:{hashlib.sha256(b'provider-request-123').hexdigest()[:16]}",
     )
 
 
@@ -467,7 +477,7 @@ def test_provider_request_id_cannot_echo_the_raw_key():
     )
 
     assert result.provider_request_id is None
-    assert RAW_KEY not in repr(result)
+    _assert_not_exposed(repr(result), RAW_KEY)
 
 
 @pytest.mark.parametrize("provider", ["openai", "gemini"])
@@ -498,7 +508,12 @@ def test_provider_body_headers_key_and_exception_text_are_not_logged_or_returned
 
     rendered_logs = "\n".join(caplog.messages)
     rendered_result = repr(result)
-    for secret in (RAW_KEY, authorization_value, provider_body_secret):
-        assert secret not in rendered_logs
-        assert secret not in rendered_result
-    assert result.provider_request_id == "safe-request-id"
+    _assert_not_exposed(
+        rendered_logs, RAW_KEY, authorization_value, provider_body_secret
+    )
+    _assert_not_exposed(
+        rendered_result, RAW_KEY, authorization_value, provider_body_secret
+    )
+    assert result.provider_request_id == (
+        f"sha256:{hashlib.sha256(b'safe-request-id').hexdigest()[:16]}"
+    )

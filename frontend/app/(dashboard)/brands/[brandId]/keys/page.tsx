@@ -137,6 +137,7 @@ export default function ProviderKeysPage() {
   const retryIdRef = useRef<string | null>(null);
   const validatingKeyIdsRef = useRef(new Set<string>());
   const activatingKeyIdsRef = useRef(new Set<string>());
+  const deletingKeyIdsRef = useRef(new Set<string>());
   const [brand, setBrand] = useState<Brand | null>(null);
   const [keys, setKeys] = useState<ProviderKey[]>([]);
   const [provider, setProvider] = useState<Provider>("openai");
@@ -153,6 +154,13 @@ export default function ProviderKeysPage() {
   const [activatingKeyIds, setActivatingKeyIds] = useState<Set<string>>(
     () => new Set()
   );
+  const [deletingKeyIds, setDeletingKeyIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [deleteFeedbackByKey, setDeleteFeedbackByKey] = useState<
+    Record<string, ValidationFeedback>
+  >({});
+  const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
   const [validationFeedbackByKey, setValidationFeedbackByKey] = useState<
     Record<string, ValidationFeedback>
   >({});
@@ -442,6 +450,105 @@ export default function ProviderKeysPage() {
     }
   }
 
+  async function deleteKey(keyId: string) {
+    if (deletingKeyIdsRef.current.has(keyId)) return;
+
+    deletingKeyIdsRef.current.add(keyId);
+    setDeletingKeyIds((current) => new Set(current).add(keyId));
+    setDeleteNotice(null);
+    setDeleteFeedbackByKey((current) => {
+      const next = { ...current };
+      delete next[keyId];
+      return next;
+    });
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const session = data.session;
+      if (!session) {
+        router.push("/login");
+        return;
+      }
+
+      const keysPath = `${apiBase}/v1/brands/${encodeURIComponent(brandId)}/keys`;
+      let response: Response | null = null;
+      try {
+        response = await fetch(`${keysPath}/${encodeURIComponent(keyId)}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+      } catch {
+        // A lost response can hide a committed deletion, so prove absence from a fresh list.
+      }
+
+      if (response?.status === 204) {
+        setKeys((current) => current.filter((key) => key.id !== keyId));
+        setDeleteNotice("Provider key deleted. No replacement key was activated.");
+        return;
+      }
+
+      if (response === null || response.status === 404 || response.status >= 500) {
+        try {
+          const listResponse = await fetch(keysPath, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+          if (!listResponse.ok) throw new Error("Unable to reconcile provider keys.");
+
+          const body = (await listResponse.json()) as { keys: ProviderKey[] };
+          setKeys(body.keys);
+          if (!body.keys.some((key) => key.id === keyId)) {
+            setDeleteNotice("Provider key deletion was confirmed from the refreshed list. No replacement key was activated.");
+            return;
+          }
+
+          setDeleteFeedbackByKey((current) => ({
+            ...current,
+            [keyId]: {
+              message: "Key cleanup did not complete. Retry deletion.",
+              tone: "error",
+            },
+          }));
+        } catch {
+          setDeleteFeedbackByKey((current) => ({
+            ...current,
+            [keyId]: {
+              message: "The deletion outcome is unknown. Refresh or retry deletion.",
+              tone: "error",
+            },
+          }));
+        }
+        return;
+      }
+
+      const body = (await response.json().catch(() => null)) as ErrorResponse | null;
+      setDeleteFeedbackByKey((current) => ({
+        ...current,
+        [keyId]: {
+          message:
+            body?.error?.code === "BRAND_CLEANUP_REQUIRED"
+              ? "Brand cleanup owns this deletion. Retry deletion from the brand page."
+              : "Unable to delete this key.",
+          tone: "error",
+        },
+      }));
+    } catch {
+      setDeleteFeedbackByKey((current) => ({
+        ...current,
+        [keyId]: {
+          message: "The deletion outcome is unknown. Refresh or retry deletion.",
+          tone: "error",
+        },
+      }));
+    } finally {
+      deletingKeyIdsRef.current.delete(keyId);
+      setDeletingKeyIds((current) => {
+        const next = new Set(current);
+        next.delete(keyId);
+        return next;
+      });
+    }
+  }
+
   if (isLoading) {
     return <p className="mx-auto max-w-5xl text-sm text-gray-600">Loading provider keys...</p>;
   }
@@ -467,6 +574,10 @@ export default function ProviderKeysPage() {
   const providerName = PROVIDERS.find((item) => item.id === provider)?.name ?? provider;
   const providerKeys = keys.filter((key) => key.provider === provider);
   const cleanupRequired = brand.cleanup_state === "cleanup_required";
+  const addBlockedByCleanup =
+    cleanupRequired ||
+    deletingKeyIds.size > 0 ||
+    keys.some((key) => key.cleanup_state === "cleanup_required");
 
   return (
     <section className="mx-auto max-w-5xl space-y-8">
@@ -512,6 +623,9 @@ export default function ProviderKeysPage() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-4" role="tabpanel" aria-label={`${providerName} keys`}>
+          {deleteNotice ? (
+            <p className="text-sm text-emerald-700" role="status">{deleteNotice}</p>
+          ) : null}
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">{providerName} keys</h2>
             <span className="text-xs text-gray-500">{providerKeys.length} saved</span>
@@ -524,14 +638,19 @@ export default function ProviderKeysPage() {
             providerKeys.map((key) => {
               const isValidating = validatingKeyIds.has(key.id);
               const isActivating = activatingKeyIds.has(key.id);
+              const isDeleting = deletingKeyIds.has(key.id);
               const feedback =
-                activationFeedbackByKey[key.id] ?? validationFeedbackByKey[key.id];
+                deleteFeedbackByKey[key.id] ??
+                activationFeedbackByKey[key.id] ??
+                validationFeedbackByKey[key.id];
               const validationDisabled =
                 isValidating ||
+                isDeleting ||
                 cleanupRequired ||
                 key.cleanup_state === "cleanup_required";
               const activationDisabled =
                 isActivating ||
+                isDeleting ||
                 cleanupRequired ||
                 key.cleanup_state === "cleanup_required" ||
                 key.is_valid === false;
@@ -585,6 +704,23 @@ export default function ProviderKeysPage() {
                       >
                         {isValidating ? "Validating..." : "Validate key"}
                       </button>
+                      <button
+                        className="rounded-md border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        type="button"
+                        disabled={
+                          isDeleting ||
+                          isValidating ||
+                          isActivating ||
+                          cleanupRequired
+                        }
+                        onClick={() => void deleteKey(key.id)}
+                      >
+                        {isDeleting
+                          ? "Deleting..."
+                          : key.cleanup_state === "cleanup_required"
+                            ? "Retry deletion"
+                            : "Delete key"}
+                      </button>
                     </div>
                   </div>
                   {feedback ? (
@@ -619,7 +755,7 @@ export default function ProviderKeysPage() {
               type="text"
               maxLength={100}
               value={label}
-              disabled={isAdding || cleanupRequired}
+              disabled={isAdding || addBlockedByCleanup}
               onChange={(event) => {
                 setLabel(event.target.value);
                 beginNewAttempt();
@@ -633,7 +769,7 @@ export default function ProviderKeysPage() {
               className="w-full rounded-md border px-3 py-2 text-sm outline-none focus:border-black"
               type="password"
               autoComplete="new-password"
-              disabled={isAdding || cleanupRequired}
+              disabled={isAdding || addBlockedByCleanup}
               onChange={beginNewAttempt}
             />
           </label>
@@ -642,7 +778,7 @@ export default function ProviderKeysPage() {
               className="mt-1"
               type="checkbox"
               checked={makeActive}
-              disabled={isAdding || cleanupRequired}
+              disabled={isAdding || addBlockedByCleanup}
               onChange={(event) => {
                 setMakeActive(event.target.checked);
                 beginNewAttempt();
@@ -654,7 +790,7 @@ export default function ProviderKeysPage() {
           <button
             className="w-full rounded-md bg-black px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
             type="submit"
-            disabled={isAdding || cleanupRequired}
+            disabled={isAdding || addBlockedByCleanup}
           >
             {isAdding ? "Storing securely..." : `Add ${providerName} key`}
           </button>

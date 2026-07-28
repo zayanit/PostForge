@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Container
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -18,6 +19,13 @@ SAFE_COLUMNS = (
     "id, provider, label, key_hint, lifecycle, is_active, is_valid, "
     "last_validated_at, last_validation_error, created_at"
 )
+
+
+def _assert_not_exposed(
+    observable: Container[str], *prohibited_values: str
+) -> None:
+    if any(value in observable for value in prohibited_values):
+        raise AssertionError("sensitive value was exposed")
 
 
 class SecurityFixture(dict):
@@ -797,12 +805,12 @@ def test_provider_key_api_owner_and_hidden_brand_parity(security_fixture):
     }
     assert owner_add.status_code == 201
     assert owner_add.json()["key_hint"] == "***Q7_W"
-    assert raw_key not in owner_add.text
+    _assert_not_exposed(owner_add.text, raw_key)
     for hidden, missing in ((hidden_list, missing_list), (hidden_add, missing_add)):
         assert hidden.status_code == missing.status_code == 404
         assert hidden.json()["error"]["code"] == missing.json()["error"]["code"] == "BRAND_NOT_FOUND"
         assert hidden.json()["error"]["message"] == missing.json()["error"]["message"] == "Brand not found."
-    assert raw_key not in hidden_add.text + missing_add.text
+    _assert_not_exposed(hidden_add.text + missing_add.text, raw_key)
 
 
 def test_provider_key_data_api_exposes_only_owner_safe_columns(security_fixture):

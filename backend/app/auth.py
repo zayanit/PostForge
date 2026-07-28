@@ -11,11 +11,14 @@ from jwt import PyJWKClient
 from .config import load_settings
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class CurrentUser:
     user_id: str
     email: str | None = None
     access_token: str | None = None
+
+    def __repr__(self) -> str:
+        return "<CurrentUser redacted>"
 
 
 def _unauthorized(message: str = "Sign in required.") -> HTTPException:

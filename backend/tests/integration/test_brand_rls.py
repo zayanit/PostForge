@@ -146,6 +146,7 @@ def test_brand_operations_are_owner_scoped_at_api_and_database_layers():
                 )
                 assert owner_upload_response.status_code == 200
                 logo_url = owner_upload_response.json()["logo_url"]
+                assert f"brands/{brand_id}/logos/" in logo_url
 
                 owner_response = api_client.get(
                     f"/api/v1/brands/{brand_id}",
@@ -215,12 +216,6 @@ def test_brand_operations_are_owner_scoped_at_api_and_database_layers():
             )
             assert stored_logo.status_code == 200
             assert stored_logo.content == PNG
-            alternate_logo_url = logo_url.removesuffix("logo.png") + "logo.jpg"
-            assert supabase_client.get(
-                alternate_logo_url,
-                params={"v": uuid4().hex},
-            ).status_code in {400, 404}
-
             engine = get_engine()
             assert _visible_brand_ids(engine, token_a, brand_id) == [brand_id]
             assert _visible_brand_ids(engine, token_b, brand_id) == []

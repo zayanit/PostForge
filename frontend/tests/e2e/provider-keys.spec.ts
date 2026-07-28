@@ -350,3 +350,216 @@ test("adds, groups, and reloads safe provider-key metadata", async ({ page }) =>
   expect(responseWasOpaque).toBeTruthy();
   expect(rawKeyIsVisible).toBeFalsy();
 });
+
+test("reconciles key and brand deletion outcomes without activating replacements", async ({
+  page,
+}) => {
+  const brandId = crypto.randomUUID();
+  const activeKeyId = crypto.randomUUID();
+  const inactiveKeyId = crypto.randomUUID();
+  const retryKeyId = crypto.randomUUID();
+  let brandExists = true;
+  let brandCleanupState: "normal" | "cleanup_required" = "normal";
+  let retryKeyAttempts = 0;
+  let brandDeleteAttempts = 0;
+  const savedKeys: SafeKey[] = [
+    {
+      id: activeKeyId,
+      provider: "openai",
+      label: "Active key",
+      key_hint: "***1111",
+      is_active: true,
+      is_valid: true,
+      last_validated_at: "2026-07-28T10:00:00Z",
+      last_validation_error: null,
+      cleanup_state: "normal",
+      created_at: "2026-07-28T09:00:00Z",
+    },
+    {
+      id: inactiveKeyId,
+      provider: "openai",
+      label: "Inactive key",
+      key_hint: "***2222",
+      is_active: false,
+      is_valid: null,
+      last_validated_at: null,
+      last_validation_error: null,
+      cleanup_state: "normal",
+      created_at: "2026-07-28T08:00:00Z",
+    },
+    {
+      id: retryKeyId,
+      provider: "openai",
+      label: "Cleanup key",
+      key_hint: "***3333",
+      is_active: false,
+      is_valid: null,
+      last_validated_at: null,
+      last_validation_error: null,
+      cleanup_state: "normal",
+      created_at: "2026-07-28T07:00:00Z",
+    },
+  ];
+
+  const brandBody = () => ({
+    id: brandId,
+    name: "Deletion Test Brand",
+    logo_url: null,
+    cleanup_state: brandCleanupState,
+    created_at: "2026-07-28T06:00:00Z",
+  });
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+
+    if (url.pathname === "/api/v1/brands" && request.method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ brands: brandExists ? [brandBody()] : [] }),
+      });
+      return;
+    }
+
+    if (url.pathname === `/api/v1/brands/${brandId}` && request.method() === "GET") {
+      await route.fulfill({
+        status: brandExists ? 200 : 404,
+        contentType: "application/json",
+        body: JSON.stringify(
+          brandExists
+            ? brandBody()
+            : { error: { code: "BRAND_NOT_FOUND", message: "Brand not found." } }
+        ),
+      });
+      return;
+    }
+
+    if (url.pathname === `/api/v1/brands/${brandId}/keys` && request.method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ keys: savedKeys }),
+      });
+      return;
+    }
+
+    const keyDeleteMatch = url.pathname.match(
+      new RegExp(`^/api/v1/brands/${brandId}/keys/([^/]+)$`)
+    );
+    if (keyDeleteMatch && request.method() === "DELETE") {
+      const keyId = keyDeleteMatch[1];
+      const keyIndex = savedKeys.findIndex((key) => key.id === keyId);
+      if (keyId === activeKeyId) {
+        savedKeys.splice(keyIndex, 1);
+        await route.fulfill({ status: 204 });
+        return;
+      }
+      if (keyId === inactiveKeyId) {
+        savedKeys.splice(keyIndex, 1);
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "PROVIDER_KEY_NOT_FOUND" } }),
+        });
+        return;
+      }
+      if (keyId === retryKeyId && retryKeyAttempts++ === 0) {
+        savedKeys[keyIndex] = {
+          ...savedKeys[keyIndex],
+          is_active: false,
+          is_valid: null,
+          last_validated_at: null,
+          cleanup_state: "cleanup_required",
+        };
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "KEY_CLEANUP_REQUIRED" } }),
+        });
+        return;
+      }
+      savedKeys.splice(keyIndex, 1);
+      await route.fulfill({ status: 204 });
+      return;
+    }
+
+    if (url.pathname === `/api/v1/brands/${brandId}` && request.method() === "DELETE") {
+      const payload = request.postDataJSON() as { confirm_name: string };
+      expect(payload.confirm_name).toBe("Deletion Test Brand");
+      brandDeleteAttempts += 1;
+      if (brandDeleteAttempts === 1) {
+        brandCleanupState = "cleanup_required";
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "BRAND_CLEANUP_REQUIRED" } }),
+        });
+        return;
+      }
+
+      brandExists = false;
+      await route.abort("connectionreset");
+      return;
+    }
+
+    await route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "NOT_FOUND" } }),
+    });
+  });
+
+  await page.goto("/signup");
+  await page.getByLabel("Email").fill(`delete-flows-${Date.now()}@example.com`);
+  await page.getByLabel("Password").fill("password123");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await expect(page.getByText(/Account created/i)).toBeVisible();
+
+  await page.goto(`/brands/${brandId}/keys`);
+  const activeKey = page.getByRole("article").filter({
+    has: page.getByRole("heading", { name: "Active key", exact: true }),
+  });
+  const inactiveKey = page.getByRole("article").filter({
+    has: page.getByRole("heading", { name: "Inactive key", exact: true }),
+  });
+  const cleanupKey = page.getByRole("article").filter({
+    has: page.getByRole("heading", { name: "Cleanup key", exact: true }),
+  });
+
+  await activeKey.getByRole("button", { name: "Delete key" }).click();
+  await expect(activeKey).toHaveCount(0);
+  await expect(inactiveKey.getByText("Inactive", { exact: true })).toBeVisible();
+  await expect(inactiveKey.getByRole("button", { name: "Activate key" })).toBeVisible();
+
+  await inactiveKey.getByRole("button", { name: "Delete key" }).click();
+  await expect(inactiveKey).toHaveCount(0);
+
+  await cleanupKey.getByRole("button", { name: "Delete key" }).click();
+  await expect(cleanupKey.getByText("Cleanup required", { exact: true })).toBeVisible();
+  await expect(cleanupKey.getByRole("button", { name: "Activate key" })).toBeDisabled();
+  await expect(cleanupKey.getByRole("button", { name: "Validate key" })).toBeDisabled();
+  await expect(page.getByLabel("API key")).toBeDisabled();
+  await cleanupKey.getByRole("button", { name: "Retry deletion" }).click();
+  await expect(cleanupKey).toHaveCount(0);
+
+  await page.goto(`/brands/${brandId}`);
+  const confirmation = page.getByLabel(/Type Deletion Test Brand to confirm/);
+  await confirmation.fill("Deletion Test Brand");
+  await page.getByRole("button", { name: "Delete brand permanently" }).click();
+  await expect(page.getByText("Cleanup required", { exact: true })).toBeVisible();
+  await expect(confirmation).toHaveValue("Deletion Test Brand");
+  await expect(page.getByRole("button", { name: "Retry brand deletion" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Manage provider keys" })).toHaveCount(0);
+  await expect(page.locator('input[type="file"]')).toBeDisabled();
+
+  await page.goto("/brands");
+  const cleanupBrand = page.getByRole("link", { name: /Deletion Test Brand/ });
+  await expect(cleanupBrand.getByText("Cleanup required", { exact: true })).toBeVisible();
+  await cleanupBrand.click();
+  await page.getByLabel(/Type Deletion Test Brand to confirm/).fill("Deletion Test Brand");
+  await page.getByRole("button", { name: "Retry brand deletion" }).click();
+  await expect(page).toHaveURL(/\/brands$/);
+  await expect(page.getByText("Deletion Test Brand")).toHaveCount(0);
+  expect(brandDeleteAttempts).toBe(2);
+});

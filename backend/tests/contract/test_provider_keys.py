@@ -4,7 +4,9 @@ import asyncio
 import io
 import json
 import logging
+import secrets
 import time
+from collections.abc import Container
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -22,12 +24,21 @@ from backend.app.auth import CurrentUser, get_current_user
 from backend.app.models.provider_key import ProviderKey, ProviderKeyAdd
 from backend.app.routes import provider_keys as provider_key_routes
 from backend.app.routes.provider_keys import get_provider_key_store
+from backend.app.services import provider_key_store as provider_key_store_module
 from backend.app.services.brand_store import BrandCleanupRequiredError
 from backend.app.services.provider_key_store import (
     IdempotencyKeyRetiredError,
+    KeyCleanupRequiredError,
+    ProviderKeyStore,
     VaultUnavailableError,
 )
-from backend.app.services import provider_key_store as provider_key_store_module
+
+
+def _assert_not_exposed(
+    observable: Container[str], *prohibited_values: str
+) -> None:
+    if any(value in observable for value in prohibited_values):
+        raise AssertionError("sensitive value was exposed")
 
 
 def _request(path: str = "/api/v1/brands/brand-id/keys/key-id/validate") -> Request:
@@ -131,7 +142,8 @@ def test_json_log_formatter_allows_only_audited_safe_fields():
         "duration_ms": 42,
         "provider_request_id": "provider-request-id",
     }
-    for secret in (
+    _assert_not_exposed(
+        rendered,
         raw_key,
         "Production Key",
         "***A1B2",
@@ -139,8 +151,7 @@ def test_json_log_formatter_allows_only_audited_safe_fields():
         "Bearer",
         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
         "owner@example.com",
-    ):
-        assert secret not in rendered
+    )
 
 
 def test_engine_hides_parameters_and_bounds_database_waits(monkeypatch: pytest.MonkeyPatch):
@@ -439,7 +450,7 @@ def _safe_key(**updates) -> ProviderKey:
     return ProviderKey.model_validate(values)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class FakeValidationClaim:
     attempted_at: datetime
     key: ProviderKey
@@ -473,7 +484,7 @@ class FakeClock:
         self.current += seconds
 
 
-@dataclass
+@dataclass(repr=False)
 class FakeValidationScenario:
     before: ProviderKey = field(default_factory=_safe_key)
     outcome: str = "valid"
@@ -524,7 +535,7 @@ class FakeValidationScenario:
         return self.before
 
 
-@dataclass
+@dataclass(repr=False)
 class FakeProviderValidator:
     scenario: FakeValidationScenario
     calls: list[tuple[str, str, float]] = field(default_factory=list)
@@ -541,12 +552,13 @@ class FakeProviderValidator:
         )
 
 
-@dataclass
+@dataclass(repr=False)
 class FakeProviderKeyStore:
     keys: list[ProviderKey] = field(default_factory=list)
     error: Exception | None = None
     add_calls: list[tuple[str, UUID, ProviderKeyAdd, UUID]] = field(default_factory=list)
     activate_calls: list[tuple[str, UUID, UUID]] = field(default_factory=list)
+    delete_calls: list[tuple[str, UUID, UUID]] = field(default_factory=list)
     validation: FakeValidationScenario | None = None
     claim_calls: list[tuple[str, UUID, UUID, float]] = field(default_factory=list)
     complete_calls: list[tuple[str, UUID, UUID, UUID, Any, float]] = field(
@@ -592,6 +604,12 @@ class FakeProviderKeyStore:
             for key in self.keys
         ]
         return activated
+
+    def delete_key(self, user_id: str, brand_id: UUID, key_id: UUID) -> None:
+        self.delete_calls.append((user_id, brand_id, key_id))
+        if self.error:
+            raise self.error
+        self.keys = [key for key in self.keys if key.id != key_id]
 
     def claim_validation(
         self,
@@ -684,7 +702,7 @@ def test_list_keys_returns_exact_empty_and_populated_safe_shapes(provider_key_cl
         ]
     }
     forbidden = {"brand_id", "vault_secret_id", "lifecycle", "validation_token", "updated_at"}
-    assert forbidden.isdisjoint(populated.json()["keys"][0])
+    _assert_not_exposed(populated.json()["keys"][0], *forbidden)
 
 
 @pytest.mark.parametrize("make_active", [None, True, False])
@@ -704,7 +722,7 @@ def test_add_key_defaults_active_and_returns_only_safe_shape(provider_key_client
     assert response.status_code == 201
     assert response.json()["is_active"] is expected_active
     assert response.json()["key_hint"] == "***A1B2"
-    assert RAW_KEY not in response.text
+    _assert_not_exposed(response.text, RAW_KEY)
     assert store.add_calls[0][2].key == RAW_KEY
     assert store.add_calls[0][2].make_active is expected_active
     assert store.add_calls[0][3] == REQUEST_ID
@@ -748,7 +766,7 @@ def test_add_key_rejects_invalid_raw_request_before_store(provider_key_client, b
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
-    assert RAW_KEY not in response.text
+    _assert_not_exposed(response.text, RAW_KEY)
     assert store.add_calls == []
 
 
@@ -791,7 +809,7 @@ def test_provider_key_errors_use_exact_safe_envelopes(
     assert response.json()["error"]["code"] == code
     assert response.json()["error"]["message"] == message
     assert response.headers["X-Request-Id"] == response.json()["error"]["request_id"]
-    assert RAW_KEY not in response.text
+    _assert_not_exposed(response.text, RAW_KEY)
 
 
 def test_opaque_brand_error_is_identical_for_list_and_add(provider_key_client):
@@ -824,8 +842,7 @@ def test_response_model_filters_internal_store_fields(provider_key_client):
     response = client.get(f"/api/v1/brands/{BRAND_ID}/keys")
 
     assert response.status_code == 200
-    assert RAW_KEY not in response.text
-    assert "vault_secret_id" not in response.text
+    _assert_not_exposed(response.text, RAW_KEY, "vault_secret_id")
 
 
 def test_add_uses_no_provider_client_dependency(provider_key_client):
@@ -854,13 +871,14 @@ def test_activate_returns_exact_safe_shape_and_accepts_unvalidated_key(
         ("11111111-1111-1111-1111-111111111111", BRAND_ID, KEY_ID)
     ]
     assert store.validator.calls == []
-    assert {
+    _assert_not_exposed(
+        response.json(),
         "brand_id",
         "vault_secret_id",
         "lifecycle",
         "validation_token",
         "updated_at",
-    }.isdisjoint(response.json())
+    )
 
 
 def test_activate_deactivates_only_prior_key_for_same_provider(provider_key_client):
@@ -965,6 +983,310 @@ def test_activate_rejects_malformed_path_before_store(provider_key_client):
     assert store.activate_calls == []
 
 
+@pytest.mark.parametrize("is_active", [True, False])
+def test_delete_key_returns_empty_204_without_activating_replacement(
+    provider_key_client,
+    is_active: bool,
+):
+    client, store = provider_key_client
+    replacement_id = UUID("77777777-7777-7777-7777-777777777777")
+    store.keys = [
+        _safe_key(is_active=is_active),
+        _safe_key(id=replacement_id, is_active=False),
+    ]
+
+    response = client.delete(f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert store.delete_calls == [
+        ("11111111-1111-1111-1111-111111111111", BRAND_ID, KEY_ID)
+    ]
+    assert store.activate_calls == []
+    assert [key.id for key in store.keys] == [replacement_id]
+    assert store.keys[0].is_active is False
+
+
+def test_delete_cleanup_required_key_retries_same_operation(provider_key_client):
+    client, store = provider_key_client
+    store.keys = [
+        _safe_key(
+            is_active=False,
+            is_valid=None,
+            cleanup_state="cleanup_required",
+        )
+    ]
+
+    response = client.delete(f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}")
+
+    assert response.status_code == 204
+    assert store.keys == []
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "code", "message"),
+    [
+        (
+            LookupError("secret path detail"),
+            404,
+            "PROVIDER_KEY_NOT_FOUND",
+            "Provider key not found.",
+        ),
+        (
+            BrandCleanupRequiredError("secret brand detail"),
+            409,
+            "BRAND_CLEANUP_REQUIRED",
+            "Brand cleanup is required. Retry deletion.",
+        ),
+        (
+            KeyCleanupRequiredError("secret SQL bind"),
+            503,
+            "KEY_CLEANUP_REQUIRED",
+            "Key cleanup did not complete. Retry deletion.",
+        ),
+    ],
+)
+def test_delete_key_errors_use_exact_safe_envelopes(
+    provider_key_client,
+    error: Exception,
+    status_code: int,
+    code: str,
+    message: str,
+):
+    client, store = provider_key_client
+    store.error = error
+
+    response = client.delete(f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}")
+
+    assert response.status_code == status_code
+    assert response.json()["error"]["code"] == code
+    assert response.json()["error"]["message"] == message
+    assert response.headers["X-Request-Id"] == response.json()["error"]["request_id"]
+    _assert_not_exposed(response.text, "secret")
+
+
+def test_delete_path_membership_is_resolved_before_brand_cleanup(provider_key_client):
+    client, store = provider_key_client
+    store.error = LookupError("not owned while brand cleanup is pending")
+
+    response = client.delete(f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "PROVIDER_KEY_NOT_FOUND"
+
+
+def test_delete_brand_cleanup_takes_precedence_for_owned_key(provider_key_client):
+    client, store = provider_key_client
+    store.error = BrandCleanupRequiredError()
+
+    response = client.delete(f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "BRAND_CLEANUP_REQUIRED"
+
+
+def test_delete_rejects_malformed_path_before_store(provider_key_client):
+    client, store = provider_key_client
+
+    response = client.delete(f"/api/v1/brands/{BRAND_ID}/keys/not-a-uuid")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert store.delete_calls == []
+
+
+def test_delete_logs_exclude_key_and_exception_details(
+    provider_key_client,
+    caplog: pytest.LogCaptureFixture,
+):
+    client, store = provider_key_client
+    store.error = KeyCleanupRequiredError(
+        f"{RAW_KEY}; Production Key; ***A1B2; secret SQL bind"
+    )
+    caplog.set_level(logging.INFO)
+
+    response = client.delete(f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}")
+
+    rendered_logs = "\n".join(
+        main._JsonLogFormatter().format(record) for record in caplog.records
+    )
+    observable = response.text + rendered_logs + caplog.text
+    assert response.status_code == 503
+    _assert_not_exposed(
+        observable, RAW_KEY, "Production Key", "***A1B2", "secret SQL bind"
+    )
+
+
+class _StoreResult:
+    def __init__(self, *, row=None, rowcount: int = 0):
+        self._row = row
+        self.rowcount = rowcount
+
+    def mappings(self):
+        return self
+
+    def one_or_none(self):
+        return self._row
+
+
+class _StoreConnection:
+    def __init__(self, results: list[_StoreResult | Exception]):
+        self.results = results
+        self.statements: list[str] = []
+
+    def execute(self, statement, parameters=None):
+        self.statements.append(str(statement))
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+class _StoreTransaction:
+    def __init__(self, connection: _StoreConnection, events: list[str]):
+        self.connection = connection
+        self.events = events
+
+    def __enter__(self):
+        self.events.append("begin")
+        return self.connection
+
+    def __exit__(self, exception_type, exception, traceback):
+        self.events.append("rollback" if exception_type else "commit")
+        return False
+
+
+class _StoreEngine:
+    def __init__(self, connections: list[_StoreConnection]):
+        self.connections = connections
+        self.events: list[str] = []
+
+    def begin(self):
+        return _StoreTransaction(self.connections.pop(0), self.events)
+
+
+def _deletion_row(lifecycle: str = "normal") -> dict[str, Any]:
+    return {
+        "vault_secret_id": UUID("55555555-5555-5555-5555-555555555555"),
+        "lifecycle": lifecycle,
+    }
+
+
+def test_store_delete_commits_fence_before_atomic_receipt_vault_and_key_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fence = _StoreConnection([_StoreResult(row=_deletion_row()), _StoreResult()])
+    cleanup = _StoreConnection(
+        [
+            _StoreResult(row=_deletion_row("cleanup_required")),
+            _StoreResult(),
+            _StoreResult(rowcount=1),
+            _StoreResult(rowcount=1),
+        ]
+    )
+    engine = _StoreEngine([fence, cleanup])
+    brands = iter([{"deletion_state": "active"}, {"deletion_state": "active"}])
+    monkeypatch.setattr(
+        provider_key_store_module.BrandStore,
+        "lock_owned_brand",
+        lambda connection, user_id, brand_id: next(brands),
+    )
+
+    ProviderKeyStore(engine).delete_key("user-id", BRAND_ID, KEY_ID)
+
+    assert engine.events == ["begin", "commit", "begin", "commit"]
+    assert "lifecycle = 'cleanup_required'" in fence.statements[1]
+    assert "is_active = false" in fence.statements[1]
+    assert "validation_token = NULL" in fence.statements[1]
+    cleanup_sql = "\n".join(cleanup.statements)
+    assert cleanup_sql.index("provider_key_idempotency") < cleanup_sql.index(
+        "vault.secrets"
+    )
+    assert cleanup_sql.index("vault.secrets") < cleanup_sql.rindex("provider_keys")
+
+
+def test_store_delete_treats_absent_vault_secret_as_success(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fence = _StoreConnection([_StoreResult(row=_deletion_row()), _StoreResult()])
+    cleanup = _StoreConnection(
+        [
+            _StoreResult(row=_deletion_row("cleanup_required")),
+            _StoreResult(),
+            _StoreResult(rowcount=0),
+            _StoreResult(rowcount=1),
+        ]
+    )
+    engine = _StoreEngine([fence, cleanup])
+    brands = iter([{"deletion_state": "active"}, {"deletion_state": "active"}])
+    monkeypatch.setattr(
+        provider_key_store_module.BrandStore,
+        "lock_owned_brand",
+        lambda connection, user_id, brand_id: next(brands),
+    )
+
+    ProviderKeyStore(engine).delete_key("user-id", BRAND_ID, KEY_ID)
+
+    assert engine.events == ["begin", "commit", "begin", "commit"]
+
+
+def test_store_delete_cleanup_sql_failure_rolls_back_after_committed_fence(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from sqlalchemy.exc import OperationalError
+
+    fence = _StoreConnection([_StoreResult(row=_deletion_row()), _StoreResult()])
+    cleanup = _StoreConnection(
+        [
+            _StoreResult(row=_deletion_row("cleanup_required")),
+            _StoreResult(),
+            OperationalError("DELETE", {}, Exception("ambiguous commit")),
+        ]
+    )
+    engine = _StoreEngine([fence, cleanup])
+    brands = iter([{"deletion_state": "active"}, {"deletion_state": "active"}])
+    monkeypatch.setattr(
+        provider_key_store_module.BrandStore,
+        "lock_owned_brand",
+        lambda connection, user_id, brand_id: next(brands),
+    )
+
+    with pytest.raises(KeyCleanupRequiredError):
+        ProviderKeyStore(engine).delete_key("user-id", BRAND_ID, KEY_ID)
+
+    assert engine.events == ["begin", "commit", "begin", "rollback"]
+
+
+def test_store_delete_checks_key_membership_before_brand_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    missing = _StoreConnection([_StoreResult(row=None)])
+    engine = _StoreEngine([missing])
+    monkeypatch.setattr(
+        provider_key_store_module.BrandStore,
+        "lock_owned_brand",
+        lambda connection, user_id, brand_id: {"deletion_state": "cleanup_required"},
+    )
+
+    with pytest.raises(LookupError):
+        ProviderKeyStore(engine).delete_key("user-id", BRAND_ID, KEY_ID)
+
+
+def test_store_delete_owned_key_defers_to_whole_brand_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    owned = _StoreConnection([_StoreResult(row=_deletion_row())])
+    engine = _StoreEngine([owned])
+    monkeypatch.setattr(
+        provider_key_store_module.BrandStore,
+        "lock_owned_brand",
+        lambda connection, user_id, brand_id: {"deletion_state": "cleanup_required"},
+    )
+
+    with pytest.raises(BrandCleanupRequiredError):
+        ProviderKeyStore(engine).delete_key("user-id", BRAND_ID, KEY_ID)
+
+
 def _safe_key_json(key: ProviderKey) -> dict[str, Any]:
     return {
         "id": str(key.id),
@@ -1046,9 +1368,10 @@ def test_validate_returns_exact_outcome_matrix_and_complete_snapshot(
             store.claim_calls[0][3],
         )
     ]
-    assert store.validator.calls[0][:2] == (provider, RAW_KEY)
+    assert store.validator.calls[0][0] == provider
+    assert secrets.compare_digest(store.validator.calls[0][1], RAW_KEY)
     assert len(store.complete_calls) == 1
-    assert RAW_KEY not in response.text
+    _assert_not_exposed(response.text, RAW_KEY)
 
 
 def test_invalid_validation_deactivates_without_replacement(provider_key_client):
@@ -1305,8 +1628,7 @@ def test_validation_response_and_logs_exclude_every_sensitive_stage_value(
         main._JsonLogFormatter().format(record) for record in caplog.records
     )
     observable = response.text + rendered_logs + caplog.text
-    for value in sensitive:
-        assert value not in observable
+    _assert_not_exposed(observable, *sensitive)
 
 
 def test_safe_validation_log_contains_only_fixed_allowlisted_metadata():

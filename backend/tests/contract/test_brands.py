@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,8 +10,17 @@ from fastapi.testclient import TestClient
 from backend.app.auth import CurrentUser, get_current_user
 from backend.app.main import app
 from backend.app.models.brand import Brand, BrandCreate
-from backend.app.routes.brands import get_brand_storage, get_brand_store
+from backend.app.routes.brands import (
+    get_brand_deletion,
+    get_brand_storage,
+    get_brand_store,
+)
+from backend.app.services.brand_deletion import (
+    BrandConfirmationMismatchError,
+    BrandDeletionCleanupError,
+)
 from backend.app.services.brand_store import (
+    BrandAssetOperation,
     BrandCleanupRequiredError,
     BrandMutationInProgressError,
     BrandNameTakenError,
@@ -26,6 +35,7 @@ class FakeBrandStore:
     owners: dict[UUID, str] = field(default_factory=dict)
     cleanup_required: set[UUID] = field(default_factory=set)
     asset_operations: set[UUID] = field(default_factory=set)
+    operations: dict[UUID, BrandAssetOperation] = field(default_factory=dict)
 
     def create_brand(self, user_id: str, payload: BrandCreate) -> Brand:
         normalized_name = payload.name.casefold()
@@ -54,7 +64,8 @@ class FakeBrandStore:
 
     def get_logo_path(self, user_id: str, brand_id: UUID) -> str | None:
         self.get_brand(user_id, brand_id)
-        self._check_mutation(brand_id)
+        if brand_id in self.cleanup_required:
+            raise BrandCleanupRequiredError
         return self.logo_paths.get(brand_id)
 
     def begin_brand_cleanup(self, user_id: str, brand_id: UUID) -> str | None:
@@ -90,6 +101,112 @@ class FakeBrandStore:
         updated_brand = brand.model_copy(update={"logo_url": logo_url})
         self.brands = [updated_brand if item.id == brand_id else item for item in self.brands]
         return updated_brand
+
+    def begin_logo_upload(
+        self, user_id: str, brand_id: UUID, extension: str
+    ) -> BrandAssetOperation:
+        brand = self.get_brand(user_id, brand_id)
+        self._check_mutation(brand_id)
+        operation_id = uuid4()
+        operation = BrandAssetOperation(
+            id=operation_id,
+            brand_id=brand_id,
+            operation="upload",
+            object_path=f"brands/{brand_id}/logos/{operation_id}.{extension}",
+            previous_path=self.logo_paths.get(brand_id),
+            state="in_progress",
+            remote_status="pending",
+        )
+        self.asset_operations.add(brand_id)
+        self.operations[operation_id] = operation
+        return operation
+
+    def get_asset_operation(
+        self, user_id: str, brand_id: UUID
+    ) -> BrandAssetOperation | None:
+        self.get_brand(user_id, brand_id)
+        return next(
+            (
+                operation
+                for operation in self.operations.values()
+                if operation.brand_id == brand_id
+            ),
+            None,
+        )
+
+    def begin_logo_remove(
+        self, user_id: str, brand_id: UUID
+    ) -> BrandAssetOperation | None:
+        self.get_brand(user_id, brand_id)
+        self._check_mutation(brand_id)
+        path = self.logo_paths.get(brand_id)
+        if path is None:
+            return None
+        operation_id = uuid4()
+        operation = BrandAssetOperation(
+            id=operation_id,
+            brand_id=brand_id,
+            operation="remove",
+            object_path=path,
+            previous_path=None,
+            state="in_progress",
+            remote_status="pending",
+        )
+        self.asset_operations.add(brand_id)
+        self.operations[operation_id] = operation
+        return operation
+
+    def record_asset_remote_status(
+        self, user_id: str, brand_id: UUID, operation_id: UUID, remote_status: str
+    ) -> None:
+        self.get_brand(user_id, brand_id)
+        operation = self.operations[operation_id]
+        self.operations[operation_id] = replace(
+            operation,
+            remote_status=remote_status,
+            state=(
+                operation.state
+                if remote_status == "succeeded"
+                else "cleanup_required"
+            ),
+        )
+
+    def abandon_definitive_asset_failure(
+        self, user_id: str, brand_id: UUID, operation_id: UUID
+    ) -> None:
+        self.operations.pop(operation_id)
+        self.asset_operations.discard(brand_id)
+
+    def mark_asset_cleanup_required(
+        self, user_id: str, brand_id: UUID, operation_id: UUID
+    ) -> None:
+        operation = self.operations[operation_id]
+        self.operations[operation_id] = replace(operation, state="cleanup_required")
+
+    def publish_uploaded_logo(
+        self, user_id: str, brand_id: UUID, operation_id: UUID
+    ) -> Brand:
+        operation = self.operations[operation_id]
+        self.logo_paths[brand_id] = operation.object_path
+        brand = self.get_brand(user_id, brand_id)
+        updated = brand.model_copy(
+            update={
+                "logo_url": (
+                    "https://example.supabase.co/storage/v1/object/public/"
+                    f"brand-assets/{operation.object_path}"
+                )
+            }
+        )
+        self.brands = [updated if item.id == brand_id else item for item in self.brands]
+        return updated
+
+    def complete_asset_operation(
+        self, user_id: str, brand_id: UUID, operation_id: UUID
+    ) -> None:
+        operation = self.operations.pop(operation_id)
+        if operation.operation == "remove":
+            self.logo_paths[brand_id] = None
+        self.asset_operations.discard(brand_id)
 
     def delete_brand(self, user_id: str, brand_id: UUID) -> None:
         self.get_brand(user_id, brand_id)
@@ -131,6 +248,47 @@ class FakeBrandStorage:
             from backend.app.services.brand_storage import BrandStorageError
 
             raise BrandStorageError
+
+    async def delete_brand_prefix(self, brand_id: UUID) -> None:
+        await self.delete_logo(f"brands/{brand_id}/")
+
+    async def brand_prefix_is_empty(self, brand_id: UUID) -> bool:
+        return not self.fail_delete
+
+
+@dataclass
+class FakeBrandDeletion:
+    store: FakeBrandStore
+    storage: FakeBrandStorage
+
+    async def delete(self, user_id: str, brand_id: UUID, confirm_name: str) -> None:
+        brand = self.store.get_brand(user_id, brand_id)
+        if brand.name != confirm_name:
+            raise BrandConfirmationMismatchError
+        if brand_id in self.store.asset_operations:
+            raise BrandMutationInProgressError
+        self.store.cleanup_required.add(brand_id)
+        updated = brand.model_copy(update={"cleanup_state": "cleanup_required"})
+        self.store.brands = [
+            updated if item.id == brand_id else item for item in self.store.brands
+        ]
+        try:
+            await self.storage.delete_brand_prefix(brand_id)
+            if not await self.storage.brand_prefix_is_empty(brand_id):
+                raise BrandDeletionCleanupError
+        except Exception as exc:
+            if isinstance(exc, BrandDeletionCleanupError):
+                raise
+            raise BrandDeletionCleanupError from exc
+        self.store.delete_brand_after_cleanup(user_id, brand_id)
+
+
+def _override_brand_dependencies(
+    store: FakeBrandStore, storage: FakeBrandStorage
+) -> None:
+    app.dependency_overrides[get_brand_store] = lambda: store
+    app.dependency_overrides[get_brand_storage] = lambda: storage
+    app.dependency_overrides[get_brand_deletion] = lambda: FakeBrandDeletion(store, storage)
 
 
 @pytest.mark.parametrize("name", ["", " ", "A", "A" * 121])
@@ -355,8 +513,7 @@ def test_logo_and_brand_mutations_respect_brand_fences(
         email="owner@example.com",
         access_token="eyJ...",
     )
-    app.dependency_overrides[get_brand_store] = lambda: store
-    app.dependency_overrides[get_brand_storage] = lambda: storage
+    _override_brand_dependencies(store, storage)
 
     try:
         with TestClient(app) as client:
@@ -380,7 +537,9 @@ def test_logo_and_brand_mutations_respect_brand_fences(
             assert delete_response.status_code == 409
             assert delete_response.json()["error"]["code"] == expected_code
         assert storage.uploads == []
-        assert storage.deletes == []
+        assert storage.deletes == (
+            [f"brands/{brand.id}/"] if fence_field == "cleanup_required" else []
+        )
         assert store.brands == ([] if fence_field == "cleanup_required" else [brand])
     finally:
         app.dependency_overrides.clear()
@@ -410,8 +569,7 @@ def test_upload_logo_rejects_unsupported_or_spoofed_content(
         email="owner@example.com",
         access_token="eyJ...",
     )
-    app.dependency_overrides[get_brand_store] = lambda: store
-    app.dependency_overrides[get_brand_storage] = lambda: storage
+    _override_brand_dependencies(store, storage)
 
     try:
         with TestClient(app) as client:
@@ -442,8 +600,7 @@ def test_upload_logo_rejects_files_over_five_megabytes():
         email="owner@example.com",
         access_token="eyJ...",
     )
-    app.dependency_overrides[get_brand_store] = lambda: store
-    app.dependency_overrides[get_brand_storage] = lambda: storage
+    _override_brand_dependencies(store, storage)
 
     try:
         oversized_png = b"\x89PNG\r\n\x1a\n" + b"x" * (5 * 1024 * 1024)
@@ -475,8 +632,7 @@ def test_upload_logo_returns_updated_brand():
         email="owner@example.com",
         access_token="eyJ...",
     )
-    app.dependency_overrides[get_brand_store] = lambda: store
-    app.dependency_overrides[get_brand_storage] = lambda: storage
+    _override_brand_dependencies(store, storage)
 
     try:
         png = b"\x89PNG\r\n\x1a\nvalid"
@@ -487,11 +643,12 @@ def test_upload_logo_returns_updated_brand():
             )
 
         assert response.status_code == 200
-        assert response.json()["logo_url"].endswith(f"brands/{brand.id}/logo.png")
-        assert storage.uploads == [
-            (f"brands/{brand.id}/logo.png", png, "image/png")
-        ]
-        assert store.logo_paths[brand.id] == f"brands/{brand.id}/logo.png"
+        logo_path = store.logo_paths[brand.id]
+        assert logo_path is not None
+        assert logo_path.startswith(f"brands/{brand.id}/logos/")
+        assert logo_path.endswith(".png")
+        assert response.json()["logo_url"].endswith(logo_path)
+        assert storage.uploads == [(logo_path, png, "image/png")]
     finally:
         app.dependency_overrides.clear()
 
@@ -510,8 +667,7 @@ def test_delete_logo_without_existing_logo_is_idempotent():
         email="owner@example.com",
         access_token="eyJ...",
     )
-    app.dependency_overrides[get_brand_store] = lambda: store
-    app.dependency_overrides[get_brand_storage] = lambda: storage
+    _override_brand_dependencies(store, storage)
 
     try:
         with TestClient(app) as client:
@@ -521,6 +677,50 @@ def test_delete_logo_without_existing_logo_is_idempotent():
         assert response.content == b""
         assert storage.deletes == []
         assert store.logo_paths.get(brand.id) is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_replacement_cleanup_failure_is_durable_and_retry_completes_it():
+    brand = Brand(
+        id=UUID("22222222-2222-2222-2222-222222222222"),
+        name="Acme Coffee",
+        logo_url="https://example.supabase.co/old.png",
+        created_at=datetime(2026, 7, 25, tzinfo=UTC),
+    )
+    old_path = f"brands/{brand.id}/logo.png"
+    store = FakeBrandStore(brands=[brand], logo_paths={brand.id: old_path})
+    storage = FakeBrandStorage(fail_delete=True)
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="11111111-1111-1111-1111-111111111111",
+        email="owner@example.com",
+        access_token="eyJ...",
+    )
+    _override_brand_dependencies(store, storage)
+
+    try:
+        png = b"\x89PNG\r\n\x1a\nvalid"
+        with TestClient(app) as client:
+            failed = client.post(
+                f"/api/v1/brands/{brand.id}/logo",
+                files={"file": ("logo.png", png, "image/png")},
+            )
+            assert failed.status_code == 502
+            operation = next(iter(store.operations.values()))
+            assert operation.remote_status == "succeeded"
+            assert operation.state == "cleanup_required"
+            assert store.logo_paths[brand.id] == operation.object_path
+
+            storage.fail_delete = False
+            retried = client.post(
+                f"/api/v1/brands/{brand.id}/logo",
+                files={"file": ("logo.png", png, "image/png")},
+            )
+
+        assert retried.status_code == 200
+        assert store.operations == {}
+        assert old_path in storage.deletes
+        assert operation.object_path in storage.deletes
     finally:
         app.dependency_overrides.clear()
 
@@ -540,8 +740,7 @@ def test_delete_brand_with_exact_confirmation_removes_brand_and_logo():
         email="owner@example.com",
         access_token="eyJ...",
     )
-    app.dependency_overrides[get_brand_store] = lambda: store
-    app.dependency_overrides[get_brand_storage] = lambda: storage
+    _override_brand_dependencies(store, storage)
 
     try:
         with TestClient(app) as client:
@@ -554,7 +753,7 @@ def test_delete_brand_with_exact_confirmation_removes_brand_and_logo():
         assert response.status_code == 204
         assert response.content == b""
         assert store.brands == []
-        assert storage.deletes == [logo_path]
+        assert storage.deletes == [f"brands/{brand.id}/"]
     finally:
         app.dependency_overrides.clear()
 
@@ -574,8 +773,7 @@ def test_delete_brand_storage_failure_retains_cleanup_required_brand():
         email="owner@example.com",
         access_token="eyJ...",
     )
-    app.dependency_overrides[get_brand_store] = lambda: store
-    app.dependency_overrides[get_brand_storage] = lambda: storage
+    _override_brand_dependencies(store, storage)
 
     try:
         with TestClient(app) as client:
@@ -594,7 +792,7 @@ def test_delete_brand_storage_failure_retains_cleanup_required_brand():
         assert len(store.brands) == 1
         assert store.brands[0].cleanup_state == "cleanup_required"
         assert store.logo_paths[brand.id] == logo_path
-        assert storage.deletes == [logo_path]
+        assert storage.deletes == [f"brands/{brand.id}/"]
 
         storage.fail_delete = False
         with TestClient(app) as client:
@@ -607,7 +805,7 @@ def test_delete_brand_storage_failure_retains_cleanup_required_brand():
         assert retry.status_code == 204
         assert retry.content == b""
         assert store.brands == []
-        assert storage.deletes == [logo_path, logo_path]
+        assert storage.deletes == [f"brands/{brand.id}/", f"brands/{brand.id}/"]
     finally:
         app.dependency_overrides.clear()
 
@@ -629,8 +827,7 @@ def test_delete_brand_rejects_missing_or_wrong_confirmation_without_mutation(
         email="owner@example.com",
         access_token="eyJ...",
     )
-    app.dependency_overrides[get_brand_store] = lambda: store
-    app.dependency_overrides[get_brand_storage] = lambda: storage
+    _override_brand_dependencies(store, storage)
 
     try:
         with TestClient(app) as client:
@@ -668,8 +865,7 @@ def test_delete_brand_returns_opaque_not_found_for_non_owner_and_nonexistent_bra
         email="owner@example.com",
         access_token="eyJ...",
     )
-    app.dependency_overrides[get_brand_store] = lambda: store
-    app.dependency_overrides[get_brand_storage] = lambda: storage
+    _override_brand_dependencies(store, storage)
 
     try:
         with TestClient(app) as client:

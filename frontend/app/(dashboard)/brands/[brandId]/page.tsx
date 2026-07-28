@@ -223,18 +223,46 @@ export default function BrandDetailPage() {
         return;
       }
 
-      const response = await fetch(
-        `${apiBase}/v1/brands/${encodeURIComponent(brandId)}`,
-        {
+      const brandPath = `${apiBase}/v1/brands/${encodeURIComponent(brandId)}`;
+      let response: Response | null = null;
+      try {
+        response = await fetch(brandPath, {
           method: "DELETE",
           headers: {
             Authorization: `Bearer ${session.access_token}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ confirm_name: confirmationName }),
+        });
+      } catch {
+        // Reconcile below before deciding whether an ambiguous deletion completed.
+      }
+
+      if (response?.status !== 204) {
+        if (response === null || response.status === 404 || response.status >= 500) {
+          try {
+            const listResponse = await fetch(`${apiBase}/v1/brands`, {
+              headers: { Authorization: `Bearer ${session.access_token}` },
+            });
+            if (!listResponse.ok) throw new Error("Unable to reconcile brands.");
+
+            const body = (await listResponse.json()) as { brands: Brand[] };
+            const retainedBrand = body.brands.find((item) => item.id === brandId);
+            if (!retainedBrand) {
+              window.dispatchEvent(new Event("postforge:brands-changed"));
+              router.push("/brands");
+              router.refresh();
+              return;
+            }
+
+            setBrand(retainedBrand);
+            setDeleteError("Brand cleanup did not complete. Retry deletion.");
+          } catch {
+            setDeleteError("The deletion outcome is unknown. Refresh or retry deletion.");
+          }
+          return;
         }
-      );
-      if (!response.ok) {
+
         const body = await response.json().catch(() => null);
         setDeleteError(body?.error?.message ?? "Unable to delete the brand.");
         return;
@@ -317,9 +345,9 @@ export default function BrandDetailPage() {
         <p className="mt-1 text-sm text-gray-600">
           Configure brand-scoped OpenAI and Gemini credentials without exposing them after submission.
         </p>
-        {cleanupRequired ? (
+        {cleanupRequired || isDeleting ? (
           <p className="mt-5 text-sm font-medium text-amber-800">
-            Provider setup is unavailable until brand cleanup completes.
+            Provider setup is unavailable while brand deletion is in progress.
           </p>
         ) : (
           <Link
@@ -396,8 +424,8 @@ export default function BrandDetailPage() {
       <div className="rounded-2xl border border-red-200 bg-red-50/40 p-8">
         <h2 className="text-lg font-semibold text-red-900">Delete brand</h2>
         <p className="mt-1 text-sm text-red-800">
-          This permanently deletes the brand and its logo. This action cannot be
-          undone.
+          This permanently deletes the brand, provider keys, and all stored assets.
+          This action cannot be undone.
         </p>
 
         <form className="mt-6 space-y-4" onSubmit={deleteBrand}>
@@ -430,7 +458,11 @@ export default function BrandDetailPage() {
               isRemoving
             }
           >
-            {isDeleting ? "Deleting..." : "Delete brand permanently"}
+            {isDeleting
+              ? "Deleting..."
+              : cleanupRequired
+                ? "Retry brand deletion"
+                : "Delete brand permanently"}
           </button>
         </form>
       </div>

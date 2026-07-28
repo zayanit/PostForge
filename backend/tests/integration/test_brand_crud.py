@@ -56,6 +56,13 @@ def _hard_delete_owned_brands(user_id: str) -> None:
 
     with get_engine().begin() as connection:
         connection.execute(
+            text(
+                "DELETE FROM brand_asset_operations WHERE brand_id IN ("
+                "SELECT id FROM brands WHERE owner_user_id = :owner_user_id)"
+            ),
+            {"owner_user_id": user_id},
+        )
+        connection.execute(
             text("DELETE FROM brands WHERE owner_user_id = :owner_user_id"),
             {"owner_user_id": user_id},
         )
@@ -152,13 +159,19 @@ def test_create_brand_against_real_supabase():
                     files={"file": ("logo.png", PNG_B, "image/png")},
                 )
                 assert same_format_response.status_code == 200
-                assert same_format_response.json()["logo_url"] == png_url
+                replacement_png_url = same_format_response.json()["logo_url"]
+                assert replacement_png_url != png_url
+                assert f"brands/{brand_id}/logos/" in replacement_png_url
                 replaced_png = supabase_client.get(
-                    png_url,
+                    replacement_png_url,
                     params={"v": uuid4().hex},
                 )
                 assert replaced_png.status_code == 200
                 assert replaced_png.content == PNG_B
+                assert supabase_client.get(
+                    png_url,
+                    params={"v": uuid4().hex},
+                ).status_code in {400, 404}
 
                 different_format_response = api_client.post(
                     f"/api/v1/brands/{brand_id}/logo",
@@ -167,7 +180,7 @@ def test_create_brand_against_real_supabase():
                 )
                 assert different_format_response.status_code == 200
                 jpeg_url = different_format_response.json()["logo_url"]
-                assert jpeg_url and jpeg_url != png_url
+                assert jpeg_url and jpeg_url != replacement_png_url
                 stored_jpeg = supabase_client.get(
                     jpeg_url,
                     params={"v": uuid4().hex},
@@ -175,7 +188,7 @@ def test_create_brand_against_real_supabase():
                 assert stored_jpeg.status_code == 200
                 assert stored_jpeg.content == JPEG
                 assert supabase_client.get(
-                    png_url,
+                    replacement_png_url,
                     params={"v": uuid4().hex},
                 ).status_code in {400, 404}
 
@@ -211,7 +224,7 @@ def test_create_brand_against_real_supabase():
                 assert unchanged_jpeg.status_code == 200
                 assert unchanged_jpeg.content == JPEG
                 assert supabase_client.get(
-                    png_url,
+                    replacement_png_url,
                     params={"v": uuid4().hex},
                 ).status_code in {400, 404}
 
@@ -645,15 +658,20 @@ def test_brand_storage_failure_persists_cleanup_required_retry_anchor():
 
     from backend.app.config import get_engine
     from backend.app.main import app
-    from backend.app.routes.brands import get_brand_storage
+    from backend.app.routes.brands import get_brand_deletion, get_brand_storage
+    from backend.app.services.brand_deletion import BrandDeletion
     from backend.app.services.brand_storage import BrandStorageError
+    from backend.app.services.brand_store import get_brand_store
 
     class ControllableStorage:
         fail_delete = True
 
-        async def delete_logo(self, path: str) -> None:
+        async def delete_brand_prefix(self, brand_id) -> None:
             if self.fail_delete:
                 raise BrandStorageError
+
+        async def brand_prefix_is_empty(self, brand_id) -> bool:
+            return not self.fail_delete
 
     user_id: str | None = None
     brand_id = str(uuid4())
@@ -682,6 +700,9 @@ def test_brand_storage_failure_persists_cleanup_required_retry_anchor():
 
             storage = ControllableStorage()
             app.dependency_overrides[get_brand_storage] = lambda: storage
+            app.dependency_overrides[get_brand_deletion] = lambda: BrandDeletion(
+                get_engine(), get_brand_store(), storage
+            )
             with TestClient(app) as api_client:
                 response = api_client.request(
                     "DELETE",

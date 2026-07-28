@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 _KEY_SUFFIX = re.compile(r"[A-Za-z0-9_-]{4}$")
@@ -42,8 +42,8 @@ class ProviderValidationCode(str, Enum):
 
 class ProviderKeyAdd(BaseModel):
     provider: Provider
-    key: str
-    label: str | None = None
+    key: str = Field(repr=False)
+    label: str | None = Field(default=None, repr=False)
     make_active: bool = True
 
     @field_validator("key")
@@ -73,8 +73,8 @@ class ProviderKeyAdd(BaseModel):
 class ProviderKey(BaseModel):
     id: UUID
     provider: Provider
-    label: str | None
-    key_hint: str
+    label: str | None = Field(repr=False)
+    key_hint: str = Field(repr=False)
     is_active: bool
     is_valid: bool | None
     last_validated_at: datetime | None
