@@ -12,3 +12,6 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
