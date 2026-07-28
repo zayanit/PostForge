@@ -7,7 +7,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 
 class SecretFixture(str):
@@ -245,6 +245,90 @@ def test_real_vault_add_list_activation_idempotency_and_retired_receipt(
         )
     assert retired.status_code == 409
     assert retired.json()["error"]["code"] == "IDEMPOTENCY_KEY_RETIRED"
+
+
+class _CommitOutcomeUnknownContext:
+    def __init__(self, engine, state):
+        self._context = engine.begin()
+        self._state = state
+
+    def __enter__(self):
+        return self._context.__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        result = self._context.__exit__(exc_type, exc_value, traceback)
+        if exc_type is None and not self._state["raised"]:
+            self._state["raised"] = True
+            raise SQLAlchemyError("commit result unavailable to client")
+        return result
+
+
+class _CommitOutcomeUnknownEngine:
+    def __init__(self, engine):
+        self._engine = engine
+        self._state = {"raised": False}
+
+    def begin(self):
+        return _CommitOutcomeUnknownContext(self._engine, self._state)
+
+
+def test_ambiguous_commit_retry_reconciles_one_vault_secret_and_row(provider_fixture):
+    from backend.app.main import app
+    from backend.app.routes.provider_keys import get_provider_key_store
+    from backend.app.services.provider_key_store import ProviderKeyStore
+
+    fixture = provider_fixture
+    brand_id = fixture["brand_id"]
+    request_id = uuid4()
+    raw_key = SecretFixture(f"ambiguous-commit-{uuid4().hex}-A1B2")
+    store = ProviderKeyStore(_CommitOutcomeUnknownEngine(fixture["engine"]))
+    app.dependency_overrides[get_provider_key_store] = lambda: store
+
+    try:
+        with TestClient(app) as client:
+            first = client.post(
+                f"/api/v1/brands/{brand_id}/keys",
+                headers={
+                    **fixture["headers"],
+                    "Idempotency-Key": str(request_id),
+                },
+                json={"provider": "openai", "key": str(raw_key)},
+            )
+            retry = client.post(
+                f"/api/v1/brands/{brand_id}/keys",
+                headers={
+                    **fixture["headers"],
+                    "Idempotency-Key": str(request_id),
+                },
+                json={"provider": "gemini", "key": "different-A1B2"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_provider_key_store, None)
+
+    assert first.status_code == 502
+    assert first.json()["error"]["code"] == "VAULT_UNAVAILABLE"
+    assert retry.status_code == 201
+    assert retry.json()["key_hint"] == "***A1B2"
+
+    with fixture["engine"].connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT id, vault_secret_id FROM provider_keys "
+                "WHERE brand_id = :brand_id"
+            ),
+            {"brand_id": brand_id},
+        ).one()
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM provider_key_idempotency "
+                "WHERE brand_id = :brand_id AND request_id = :request_id"
+            ),
+            {"brand_id": brand_id, "request_id": request_id},
+        ).scalar_one() == 1
+        assert connection.execute(
+            text("SELECT count(*) FROM vault.secrets WHERE id = :id"),
+            {"id": row.vault_secret_id},
+        ).scalar_one() == 1
 
 
 def test_real_add_validation_and_cleanup_fences_create_no_secret(provider_fixture):
