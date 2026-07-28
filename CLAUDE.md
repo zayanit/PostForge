@@ -7,10 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 PostForge is a multi-brand SaaS for generating social-media images (BYOK — users
 supply their own OpenAI/Gemini API keys). The full product design lives in
 `docs/implementation-plan.md` (schema, API surface, generation pipeline, frontend
-structure, build order across 8 phases). **Only Phase 1 (auth/profile) and Phase 2
-(Dockerization) are implemented so far** — brands, brand kits, provider keys, and
-image generation itself (Phases 3–7) do not exist in code yet. Don't assume routes,
-tables, or UI from the implementation plan exist until you've checked.
+structure, build order across 8 phases). **Phase 1 (auth/profile), Phase 2
+(Dockerization), and Phase 3 (Brand CRUD) are implemented so far** — brand kits,
+provider keys, and image generation itself (Phases 4–7) do not exist in code yet.
+Don't assume routes, tables, or UI from the implementation plan exist until you've
+checked.
 
 The authoritative product rules are in `.specify/memory/constitution.md`, not this
 file — read it before making architectural decisions. Key non-negotiables from it:

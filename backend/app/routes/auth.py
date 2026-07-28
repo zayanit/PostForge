@@ -5,7 +5,7 @@ import logging
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..config import load_settings
 from ..services.login_guard import LoginGuard, get_login_guard
@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(repr=False)
+    password: str = Field(repr=False)
 
 
 class InvalidCredentialsError(Exception):

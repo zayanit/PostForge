@@ -11,6 +11,7 @@ type Brand = {
   id: string;
   name: string;
   logo_url: string | null;
+  cleanup_state: "normal" | "cleanup_required";
   created_at: string;
 };
 
@@ -121,9 +122,16 @@ export default function BrandsPage() {
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-sm font-semibold">
                 {brand.name.slice(0, 2).toUpperCase()}
               </div>
-              <h2 className="mt-5 font-semibold group-hover:underline">
-                {brand.name}
-              </h2>
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="font-semibold group-hover:underline">
+                  {brand.name}
+                </h2>
+                {brand.cleanup_state === "cleanup_required" ? (
+                  <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-900">
+                    Cleanup required
+                  </span>
+                ) : null}
+              </div>
               <p className="mt-1 text-xs text-gray-500">
                 Created {new Date(brand.created_at).toLocaleDateString()}
               </p>

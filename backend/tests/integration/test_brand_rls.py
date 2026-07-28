@@ -65,65 +65,39 @@ def _visible_brand_ids(engine: Engine, access_token: str, brand_id: str) -> list
     return [str(row) for row in rows]
 
 
-def _cross_owner_mutation_results(
+def _assert_brand_mutations_are_blocked(
     engine: Engine,
     access_token: str,
     brand_id: str,
-) -> tuple[list[str], list[str]]:
-    claims = jwt.decode(access_token, options={"verify_signature": False})
-
-    with engine.begin() as connection:
-        connection.execute(text("SET LOCAL ROLE authenticated"))
-        connection.execute(
-            text("SELECT set_config('request.jwt.claims', :claims, true)"),
-            {"claims": json.dumps(claims)},
-        )
-        updated = connection.execute(
-            text(
-                """
-                UPDATE brands
-                SET name = 'Unauthorized Update'
-                WHERE id = :brand_id
-                RETURNING id
-                """
-            ),
-            {"brand_id": brand_id},
-        ).scalars().all()
-        deleted = connection.execute(
-            text("DELETE FROM brands WHERE id = :brand_id RETURNING id"),
-            {"brand_id": brand_id},
-        ).scalars().all()
-
-    return [str(row) for row in updated], [str(row) for row in deleted]
-
-
-def _assert_cross_owner_insert_is_blocked(
-    engine: Engine,
-    access_token: str,
     owner_user_id: str,
 ) -> None:
     claims = jwt.decode(access_token, options={"verify_signature": False})
-
-    with pytest.raises(DBAPIError) as exc_info:
-        with engine.begin() as connection:
-            connection.execute(text("SET LOCAL ROLE authenticated"))
-            connection.execute(
-                text("SELECT set_config('request.jwt.claims', :claims, true)"),
-                {"claims": json.dumps(claims)},
-            )
-            connection.execute(
-                text(
-                    """
-                    INSERT INTO brands (owner_user_id, name)
-                    VALUES (:owner_user_id, 'Unauthorized Insert')
-                    """
-                ),
-                {"owner_user_id": owner_user_id},
-            )
-
-    original = exc_info.value.orig
-    sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
-    assert sqlstate == "42501"
+    statements = (
+        (
+            "INSERT INTO brands (owner_user_id, name) "
+            "VALUES (:owner_user_id, 'Unauthorized Insert')",
+            {"owner_user_id": owner_user_id},
+        ),
+        (
+            "UPDATE brands SET name = 'Unauthorized Update' WHERE id = :brand_id",
+            {"brand_id": brand_id},
+        ),
+        ("DELETE FROM brands WHERE id = :brand_id", {"brand_id": brand_id}),
+    )
+    for statement, parameters in statements:
+        with pytest.raises(DBAPIError) as exc_info:
+            with engine.begin() as connection:
+                connection.execute(text("SET LOCAL ROLE authenticated"))
+                connection.execute(
+                    text("SELECT set_config('request.jwt.claims', :claims, true)"),
+                    {"claims": json.dumps(claims)},
+                )
+                connection.execute(text(statement), parameters)
+        original = exc_info.value.orig
+        sqlstate = getattr(original, "sqlstate", None) or getattr(
+            original, "pgcode", None
+        )
+        assert sqlstate == "42501"
 
 
 def test_brand_operations_are_owner_scoped_at_api_and_database_layers():
@@ -172,6 +146,7 @@ def test_brand_operations_are_owner_scoped_at_api_and_database_layers():
                 )
                 assert owner_upload_response.status_code == 200
                 logo_url = owner_upload_response.json()["logo_url"]
+                assert f"brands/{brand_id}/logos/" in logo_url
 
                 owner_response = api_client.get(
                     f"/api/v1/brands/{brand_id}",
@@ -241,17 +216,11 @@ def test_brand_operations_are_owner_scoped_at_api_and_database_layers():
             )
             assert stored_logo.status_code == 200
             assert stored_logo.content == PNG
-            alternate_logo_url = logo_url.removesuffix("logo.png") + "logo.jpg"
-            assert supabase_client.get(
-                alternate_logo_url,
-                params={"v": uuid4().hex},
-            ).status_code in {400, 404}
-
             engine = get_engine()
             assert _visible_brand_ids(engine, token_a, brand_id) == [brand_id]
             assert _visible_brand_ids(engine, token_b, brand_id) == []
-            assert _cross_owner_mutation_results(engine, token_b, brand_id) == ([], [])
-            _assert_cross_owner_insert_is_blocked(engine, token_b, user_a_id)
+            _assert_brand_mutations_are_blocked(engine, token_a, brand_id, user_a_id)
+            _assert_brand_mutations_are_blocked(engine, token_b, brand_id, user_a_id)
 
             with TestClient(app) as api_client:
                 post_rls_owner_response = api_client.get(
@@ -278,6 +247,11 @@ def test_brand_operations_are_owner_scoped_at_api_and_database_layers():
                         ]
                     },
                 )
+                with get_engine().begin() as connection:
+                    connection.execute(
+                        text("DELETE FROM brands WHERE id = :brand_id"),
+                        {"brand_id": brand_id},
+                    )
                 assert cleanup_response.is_success
             for user_id in (user_a_id, user_b_id):
                 if user_id:

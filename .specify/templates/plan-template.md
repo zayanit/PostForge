@@ -4,7 +4,7 @@
 
 **Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
 
-**Note**: This template is filled in by the `/speckit-plan` command; its definition describes the execution workflow.
+**Note**: This template is filled in by the `/speckit.plan` command; its definition describes the execution workflow.
 
 ## Summary
 
@@ -40,7 +40,12 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+[Determine gates from the constitution file. Before Phase 0, identify all universal
+Definition of Done checks and each capability check whose prerequisite is already
+implemented, regardless of roadmap phase. For every applicable check, document how it
+will be verified during implementation or runtime validation; do not claim it has
+already passed. Mark a check N/A only with a concrete rationale that its prerequisite
+is not implemented or the feature's scope cannot affect that capability.]
 
 ## Project Structure
 
@@ -48,12 +53,12 @@
 
 ```text
 specs/[###-feature]/
-├── plan.md              # This file (/speckit-plan command output)
-├── research.md          # Phase 0 output (/speckit-plan command)
-├── data-model.md        # Phase 1 output (/speckit-plan command)
-├── quickstart.md        # Phase 1 output (/speckit-plan command)
-├── contracts/           # Phase 1 output (/speckit-plan command)
-└── tasks.md             # Phase 2 output (/speckit-tasks command - NOT created by /speckit-plan)
+├── plan.md              # This file (/speckit.plan command output)
+├── research.md          # Phase 0 output (/speckit.plan command)
+├── data-model.md        # Phase 1 output (/speckit.plan command)
+├── quickstart.md        # Phase 1 output (/speckit.plan command)
+├── contracts/           # Phase 1 output (/speckit.plan command)
+└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
 ```
 
 ### Source Code (repository root)

@@ -3,7 +3,7 @@
 **Version**: 1.5.0
 **Date**: 2026-02-08
 **Status**: Approved
-**Constitution**: v1.0.0
+**Constitution**: v2.0.0
 
 ---
 
@@ -76,7 +76,7 @@ PostForge is a multi-brand SaaS for generating social images. Users create brand
 │                     │                          │                │
 │                     ▼                          ▼                │
 │               ┌───────────────┐        ┌───────────────┐        │
-│               │   Next.js 14  │        │    FastAPI    │        │
+│               │   Next.js 15  │        │    FastAPI    │        │
 │               │   (frontend)  │ ─────► │   (backend)   │        │
 │               └───────────────┘        └───────────────┘        │
 └─────────────────────────────────────────────────────────────────┘
@@ -102,7 +102,7 @@ PostForge is a multi-brand SaaS for generating social images. Users create brand
 
 | Layer | Technology |
 |-------|------------|
-| Frontend | Next.js 14 (App Router) |
+| Frontend | Next.js 15 (App Router) |
 | Backend | FastAPI (Python) |
 | Auth | Supabase Auth |
 | Database | Supabase PostgreSQL |
@@ -1337,7 +1337,7 @@ frontend/
 | 1.9 | Initialize FastAPI project with dependencies |
 | 1.10 | Add auth middleware (JWT verification) |
 | 1.11 | Add health endpoint |
-| 1.12 | Initialize Next.js 14 project |
+| 1.12 | Initialize Next.js 15 project |
 | 1.13 | Configure Supabase auth |
 | 1.14 | Add auth pages + protected route middleware |
 | 1.15 | API: Add `GET /me` endpoint |
@@ -1533,16 +1533,23 @@ PORT=8000
 
 ## Verification Checklist
 
-### Definition of Done (per feature)
+### Definition of Done (phase-aware per feature)
 
-- [ ] Works for brand with 0 brand kit answers
-- [ ] Works for brand with complete brand kit
-- [ ] Works with OpenAI provider
-- [ ] Works with Gemini provider
-- [ ] User can fetch and update own profile (`GET /me`, `PATCH /me`)
-- [ ] RLS policies tested (query as different user fails)
-- [ ] Generation lifecycle tested (`pending` → `processing` → `succeeded|failed`)
-- [ ] Hard delete verified (DB rows AND storage assets removed)
+Universal checks apply to every feature; capability checks apply once their
+prerequisite phase has been implemented, matching Constitution Principle VII.
+
+- [ ] Feature acceptance scenarios pass at every layer changed
+- [ ] RLS/privileges and server-side ownership are tested for every table/operation changed
+- [ ] Secrets, tokens, and PII are absent from client responses and logs
+- [ ] Hard delete is verified for every DB row, secret, and storage asset affected
+- [ ] Brand-kit zero-answer and complete-kit scenarios pass (Brand Kit phase onward, when relevant)
+- [ ] OpenAI behavior passes (OpenAI integration onward, when relevant)
+- [ ] Gemini behavior passes (Gemini integration onward, when relevant)
+- [ ] Generation lifecycle and PNG output pass (Generation phase onward, when relevant)
+- [ ] User profile behavior passes (only features changing profile/account behavior)
+
+Before a prerequisite capability exists, its check is N/A and the feature plan must
+record that rationale; applicable checks cannot be deferred after the capability exists.
 
 ### Data Integrity Verification
 

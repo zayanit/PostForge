@@ -17,6 +17,7 @@ type Brand = {
   id: string;
   name: string;
   logo_url: string | null;
+  cleanup_state: "normal" | "cleanup_required";
   created_at: string;
 };
 
@@ -222,18 +223,46 @@ export default function BrandDetailPage() {
         return;
       }
 
-      const response = await fetch(
-        `${apiBase}/v1/brands/${encodeURIComponent(brandId)}`,
-        {
+      const brandPath = `${apiBase}/v1/brands/${encodeURIComponent(brandId)}`;
+      let response: Response | null = null;
+      try {
+        response = await fetch(brandPath, {
           method: "DELETE",
           headers: {
             Authorization: `Bearer ${session.access_token}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ confirm_name: confirmationName }),
+        });
+      } catch {
+        // Reconcile below before deciding whether an ambiguous deletion completed.
+      }
+
+      if (response?.status !== 204) {
+        if (response === null || response.status === 404 || response.status >= 500) {
+          try {
+            const listResponse = await fetch(`${apiBase}/v1/brands`, {
+              headers: { Authorization: `Bearer ${session.access_token}` },
+            });
+            if (!listResponse.ok) throw new Error("Unable to reconcile brands.");
+
+            const body = (await listResponse.json()) as { brands: Brand[] };
+            const retainedBrand = body.brands.find((item) => item.id === brandId);
+            if (!retainedBrand) {
+              window.dispatchEvent(new Event("postforge:brands-changed"));
+              router.push("/brands");
+              router.refresh();
+              return;
+            }
+
+            setBrand(retainedBrand);
+            setDeleteError("Brand cleanup did not complete. Retry deletion.");
+          } catch {
+            setDeleteError("The deletion outcome is unknown. Refresh or retry deletion.");
+          }
+          return;
         }
-      );
-      if (!response.ok) {
+
         const body = await response.json().catch(() => null);
         setDeleteError(body?.error?.message ?? "Unable to delete the brand.");
         return;
@@ -282,6 +311,8 @@ export default function BrandDetailPage() {
     );
   }
 
+  const cleanupRequired = brand.cleanup_state === "cleanup_required";
+
   return (
     <section className="mx-auto max-w-3xl space-y-8">
       <Link className="text-sm text-gray-600 hover:text-black" href="/brands">
@@ -291,9 +322,14 @@ export default function BrandDetailPage() {
         <p className="text-sm font-medium uppercase tracking-wider text-gray-500">
           Brand
         </p>
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight">
-          {brand.name}
-        </h1>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-3xl font-semibold tracking-tight">{brand.name}</h1>
+          {cleanupRequired ? (
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">
+              Cleanup required
+            </span>
+          ) : null}
+        </div>
         <dl className="mt-8 border-t pt-6">
           <dt className="text-sm text-gray-500">Created</dt>
           <dd className="mt-1 font-medium">
@@ -302,6 +338,25 @@ export default function BrandDetailPage() {
             )}
           </dd>
         </dl>
+      </div>
+
+      <div className="rounded-2xl border p-8">
+        <h2 className="text-lg font-semibold">Provider keys</h2>
+        <p className="mt-1 text-sm text-gray-600">
+          Configure brand-scoped OpenAI and Gemini credentials without exposing them after submission.
+        </p>
+        {cleanupRequired || isDeleting ? (
+          <p className="mt-5 text-sm font-medium text-amber-800">
+            Provider setup is unavailable while brand deletion is in progress.
+          </p>
+        ) : (
+          <Link
+            className="mt-5 inline-block rounded-md border px-4 py-2 text-sm font-medium hover:border-gray-400"
+            href={`/brands/${brand.id}/keys`}
+          >
+            Manage provider keys
+          </Link>
+        )}
       </div>
 
       <div className="rounded-2xl border p-8">
@@ -331,7 +386,7 @@ export default function BrandDetailPage() {
               className="block w-full text-sm file:mr-4 file:rounded-md file:border file:bg-white file:px-3 file:py-2 file:text-sm"
               type="file"
               accept="image/png,image/jpeg,image/webp"
-              disabled={isUploading || isRemoving || isDeleting}
+              disabled={cleanupRequired || isUploading || isRemoving || isDeleting}
               onChange={selectLogo}
             />
             {logoError ? (
@@ -343,7 +398,7 @@ export default function BrandDetailPage() {
               <button
                 className="rounded-md bg-black px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
                 type="submit"
-                disabled={!selectedFile || isUploading || isRemoving || isDeleting}
+                disabled={cleanupRequired || !selectedFile || isUploading || isRemoving || isDeleting}
               >
                 {isUploading
                   ? "Uploading..."
@@ -355,7 +410,7 @@ export default function BrandDetailPage() {
                 <button
                   className="rounded-md border px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                   type="button"
-                  disabled={isUploading || isRemoving || isDeleting}
+                  disabled={cleanupRequired || isUploading || isRemoving || isDeleting}
                   onClick={removeLogo}
                 >
                   {isRemoving ? "Removing..." : "Remove logo"}
@@ -369,8 +424,8 @@ export default function BrandDetailPage() {
       <div className="rounded-2xl border border-red-200 bg-red-50/40 p-8">
         <h2 className="text-lg font-semibold text-red-900">Delete brand</h2>
         <p className="mt-1 text-sm text-red-800">
-          This permanently deletes the brand and its logo. This action cannot be
-          undone.
+          This permanently deletes the brand, provider keys, and all stored assets.
+          This action cannot be undone.
         </p>
 
         <form className="mt-6 space-y-4" onSubmit={deleteBrand}>
@@ -403,7 +458,11 @@ export default function BrandDetailPage() {
               isRemoving
             }
           >
-            {isDeleting ? "Deleting..." : "Delete brand permanently"}
+            {isDeleting
+              ? "Deleting..."
+              : cleanupRequired
+                ? "Retry brand deletion"
+                : "Delete brand permanently"}
           </button>
         </form>
       </div>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, field_validator
@@ -26,6 +27,7 @@ class Brand(BaseModel):
     id: UUID
     name: str
     logo_url: str | None
+    cleanup_state: Literal["normal", "cleanup_required"] = "normal"
     created_at: datetime
 
 
