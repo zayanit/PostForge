@@ -30,6 +30,18 @@ type ProviderKey = {
 };
 
 type ErrorResponse = { error?: { code?: string } };
+type ValidationOutcome = {
+  outcome: "valid" | "invalid" | "temporary";
+  attempted_at: string;
+  code: string;
+  message: string;
+  key: ProviderKey;
+};
+
+type ValidationFeedback = {
+  message: string;
+  tone: "success" | "error" | "temporary";
+};
 
 const PROVIDERS: Array<{ id: Provider; name: string }> = [
   { id: "openai", name: "OpenAI" },
@@ -57,12 +69,58 @@ function validationLabel(key: ProviderKey) {
   return "Unvalidated";
 }
 
+function validationFeedback(outcome: ValidationOutcome): ValidationFeedback {
+  if (outcome.outcome === "valid") {
+    return { message: "The provider accepted this key.", tone: "success" };
+  }
+  if (outcome.outcome === "invalid") {
+    return { message: "The provider rejected this key.", tone: "error" };
+  }
+
+  switch (outcome.code) {
+    case "PROVIDER_TIMEOUT":
+      return {
+        message: "Validation timed out. The saved key status was not changed.",
+        tone: "temporary",
+      };
+    case "VALIDATION_IN_PROGRESS":
+      return {
+        message: "Validation is already in progress. The saved key status was not changed.",
+        tone: "temporary",
+      };
+    case "VALIDATION_SUPERSEDED":
+      return {
+        message: "A newer validation replaced this attempt. The latest saved status is shown.",
+        tone: "temporary",
+      };
+    default:
+      return {
+        message: "The provider could not validate this key right now. The saved key status was not changed.",
+        tone: "temporary",
+      };
+  }
+}
+
+function validationErrorMessage(code?: string) {
+  switch (code) {
+    case "BRAND_CLEANUP_REQUIRED":
+      return "Brand cleanup is required before this key can be validated.";
+    case "KEY_CLEANUP_REQUIRED":
+      return "Key cleanup is required before this key can be validated.";
+    case "VAULT_UNAVAILABLE":
+      return "Secure key storage is unavailable right now.";
+    default:
+      return "Unable to validate this key.";
+  }
+}
+
 export default function ProviderKeysPage() {
   const { brandId } = useParams<{ brandId: string }>();
   const router = useRouter();
   const apiBase = getPublicEnv("NEXT_PUBLIC_API_URL");
   const keyInputRef = useRef<HTMLInputElement>(null);
   const retryIdRef = useRef<string | null>(null);
+  const validatingKeyIdsRef = useRef(new Set<string>());
   const [brand, setBrand] = useState<Brand | null>(null);
   const [keys, setKeys] = useState<ProviderKey[]>([]);
   const [provider, setProvider] = useState<Provider>("openai");
@@ -73,6 +131,12 @@ export default function ProviderKeysPage() {
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [addError, setAddError] = useState<string | null>(null);
+  const [validatingKeyIds, setValidatingKeyIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [validationFeedbackByKey, setValidationFeedbackByKey] = useState<
+    Record<string, ValidationFeedback>
+  >({});
 
   useEffect(() => {
     let active = true;
@@ -202,6 +266,75 @@ export default function ProviderKeysPage() {
     }
   }
 
+  async function validateKey(keyId: string) {
+    if (validatingKeyIdsRef.current.has(keyId)) return;
+
+    validatingKeyIdsRef.current.add(keyId);
+    setValidatingKeyIds((current) => new Set(current).add(keyId));
+    setValidationFeedbackByKey((current) => {
+      const next = { ...current };
+      delete next[keyId];
+      return next;
+    });
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const session = data.session;
+      if (!session) {
+        router.push("/login");
+        return;
+      }
+
+      const response = await fetch(
+        `${apiBase}/v1/brands/${encodeURIComponent(brandId)}/keys/${encodeURIComponent(keyId)}/validate`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        }
+      );
+      const body = (await response.json().catch(() => null)) as
+        | ValidationOutcome
+        | ErrorResponse
+        | null;
+      if (!response.ok) {
+        setValidationFeedbackByKey((current) => ({
+          ...current,
+          [keyId]: {
+            message: validationErrorMessage(
+              (body as ErrorResponse | null)?.error?.code
+            ),
+            tone: "error",
+          },
+        }));
+        return;
+      }
+
+      const outcome = body as ValidationOutcome;
+      setKeys((current) =>
+        current.map((key) => (key.id === keyId ? outcome.key : key))
+      );
+      setValidationFeedbackByKey((current) => ({
+        ...current,
+        [keyId]: validationFeedback(outcome),
+      }));
+    } catch {
+      setValidationFeedbackByKey((current) => ({
+        ...current,
+        [keyId]: {
+          message: "Unable to validate this key. Refresh its status before trying again.",
+          tone: "error",
+        },
+      }));
+    } finally {
+      validatingKeyIdsRef.current.delete(keyId);
+      setValidatingKeyIds((current) => {
+        const next = new Set(current);
+        next.delete(keyId);
+        return next;
+      });
+    }
+  }
+
   if (isLoading) {
     return <p className="mx-auto max-w-5xl text-sm text-gray-600">Loading provider keys...</p>;
   }
@@ -281,32 +414,70 @@ export default function ProviderKeysPage() {
               No {providerName} keys have been added.
             </div>
           ) : (
-            providerKeys.map((key) => (
-              <article className="rounded-xl border bg-white p-5 shadow-sm" key={key.id}>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h3 className="font-semibold">{key.label || `${providerName} key`}</h3>
-                    <p className="mt-1 font-mono text-sm text-gray-600">{key.key_hint}</p>
-                  </div>
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${key.is_active ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-700"}`}>
-                      {key.is_active ? "Active" : "Inactive"}
-                    </span>
-                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800">
-                      {validationLabel(key)}
-                    </span>
-                    {key.cleanup_state === "cleanup_required" ? (
-                      <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-900">
-                        Cleanup required
+            providerKeys.map((key) => {
+              const isValidating = validatingKeyIds.has(key.id);
+              const feedback = validationFeedbackByKey[key.id];
+              const validationDisabled =
+                isValidating ||
+                cleanupRequired ||
+                key.cleanup_state === "cleanup_required";
+
+              return (
+                <article className="rounded-xl border bg-white p-5 shadow-sm" key={key.id}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold">{key.label || `${providerName} key`}</h3>
+                      <p className="mt-1 font-mono text-sm text-gray-600">{key.key_hint}</p>
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${key.is_active ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-700"}`}>
+                        {key.is_active ? "Active" : "Inactive"}
                       </span>
-                    ) : null}
+                      <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800">
+                        {validationLabel(key)}
+                      </span>
+                      {key.cleanup_state === "cleanup_required" ? (
+                        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-900">
+                          Cleanup required
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-                <p className="mt-5 border-t pt-4 text-xs text-gray-500">
-                  Added {new Date(key.created_at).toLocaleDateString()}
-                </p>
-              </article>
-            ))
+                  <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-end sm:justify-between">
+                    <div className="text-xs text-gray-500">
+                      <p>Added {new Date(key.created_at).toLocaleDateString()}</p>
+                      <p className="mt-1">
+                        {key.last_validated_at
+                          ? `Last validated ${new Date(key.last_validated_at).toLocaleString()}`
+                          : "Not yet validated"}
+                      </p>
+                    </div>
+                    <button
+                      className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      type="button"
+                      disabled={validationDisabled}
+                      onClick={() => void validateKey(key.id)}
+                    >
+                      {isValidating ? "Validating..." : "Validate key"}
+                    </button>
+                  </div>
+                  {feedback ? (
+                    <p
+                      className={`mt-3 text-sm ${
+                        feedback.tone === "success"
+                          ? "text-emerald-700"
+                          : feedback.tone === "error"
+                            ? "text-red-600"
+                            : "text-amber-700"
+                      }`}
+                      role="status"
+                    >
+                      {feedback.message}
+                    </p>
+                  ) : null}
+                </article>
+              );
+            })
           )}
         </div>
 

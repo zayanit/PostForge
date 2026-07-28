@@ -22,6 +22,24 @@ class ProviderKeyLifecycle(str, Enum):
     CLEANUP_REQUIRED = "cleanup_required"
 
 
+class ProviderValidationOutcome(str, Enum):
+    VALID = "valid"
+    INVALID = "invalid"
+    TEMPORARY = "temporary"
+
+
+class ProviderValidationCode(str, Enum):
+    VALID = "VALID"
+    INVALID_CREDENTIAL = "INVALID_CREDENTIAL"
+    PROVIDER_TIMEOUT = "PROVIDER_TIMEOUT"
+    PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
+    PROVIDER_RATE_LIMITED = "PROVIDER_RATE_LIMITED"
+    PROVIDER_PERMISSION = "PROVIDER_PERMISSION"
+    VALIDATION_UNDETERMINED = "VALIDATION_UNDETERMINED"
+    VALIDATION_IN_PROGRESS = "VALIDATION_IN_PROGRESS"
+    VALIDATION_SUPERSEDED = "VALIDATION_SUPERSEDED"
+
+
 class ProviderKeyAdd(BaseModel):
     provider: Provider
     key: str
@@ -67,6 +85,14 @@ class ProviderKey(BaseModel):
 
 class ProviderKeyListResponse(BaseModel):
     keys: list[ProviderKey]
+
+
+class ProviderKeyValidationResponse(BaseModel):
+    outcome: ProviderValidationOutcome
+    attempted_at: datetime
+    code: ProviderValidationCode
+    message: str
+    key: ProviderKey
 
 
 IdempotencyKey = UUID

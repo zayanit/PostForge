@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -22,6 +23,46 @@ SAFE_COLUMNS = (
 class SecurityFixture(dict):
     def __repr__(self) -> str:
         return "<SecurityFixture redacted>"
+
+
+class SecretFixture(str):
+    def __repr__(self) -> str:
+        return "<SecretFixture redacted>"
+
+
+class MockProviderValidator:
+    def __init__(self, expected_secret: SecretFixture) -> None:
+        self.expected_secret = expected_secret
+        self.calls = 0
+
+    def __repr__(self) -> str:
+        return "<MockProviderValidator redacted>"
+
+    async def _validate(self, *args, **kwargs):
+        assert any(
+            value == self.expected_secret for value in [*args, *kwargs.values()]
+        )
+        self.calls += 1
+        return SimpleNamespace(
+            outcome="valid", code="VALID", provider_request_id="mock-request"
+        )
+
+    async def validate(self, *args, **kwargs):
+        return await self._validate(*args, **kwargs)
+
+    async def validate_key(self, *args, **kwargs):
+        return await self._validate(*args, **kwargs)
+
+    async def __call__(self, *args, **kwargs):
+        return await self._validate(*args, **kwargs)
+
+
+def _provider_validator_dependency():
+    from backend.app.routes import provider_keys as provider_key_routes
+
+    dependency = getattr(provider_key_routes, "get_provider_validator", None)
+    assert dependency is not None, "validation provider dependency is not implemented"
+    return dependency
 
 
 def _required_env(name: str) -> str:
@@ -105,6 +146,8 @@ def security_fixture():
             user_ids.extend((user_a, user_b))
             brand_a, brand_b = str(uuid4()), str(uuid4())
             key_a, key_b = str(uuid4()), str(uuid4())
+            secret_a = SecretFixture(f"rls-validation-{uuid4().hex}-A1B2")
+            secret_b = SecretFixture(f"rls-validation-{uuid4().hex}-C3_D")
             brand_ids.extend((brand_a, brand_b))
             with engine.begin() as connection:
                 connection.execute(
@@ -120,6 +163,14 @@ def security_fixture():
                         "user_b": user_b,
                     },
                 )
+                vault_a = connection.execute(
+                    text("SELECT vault.create_secret(:secret, NULL, '', NULL)"),
+                    {"secret": str(secret_a)},
+                ).scalar_one()
+                vault_b = connection.execute(
+                    text("SELECT vault.create_secret(:secret, NULL, '', NULL)"),
+                    {"secret": str(secret_b)},
+                ).scalar_one()
                 connection.execute(
                     text(
                         "INSERT INTO provider_keys "
@@ -130,10 +181,10 @@ def security_fixture():
                     {
                         "key_a": key_a,
                         "brand_a": brand_a,
-                        "vault_a": str(uuid4()),
+                        "vault_a": vault_a,
                         "key_b": key_b,
                         "brand_b": brand_b,
-                        "vault_b": str(uuid4()),
+                        "vault_b": vault_b,
                     },
                 )
             yield SecurityFixture({
@@ -145,7 +196,10 @@ def security_fixture():
                 "token_a": token_a,
                 "token_b": token_b,
                 "brand_a": brand_a,
+                "brand_b": brand_b,
                 "key_a": key_a,
+                "key_b": key_b,
+                "secret_a": secret_a,
             })
         finally:
             if brand_ids:
@@ -791,3 +845,140 @@ def test_provider_key_data_api_exposes_only_owner_safe_columns(security_fixture)
     assert all(row["id"] != fixture["key_a"] for row in non_owner.json())
     assert internal.status_code in {400, 401, 403}
     assert vault.status_code in {400, 401, 403, 404, 406}
+
+
+def test_validate_api_owner_and_hidden_key_paths_have_opaque_parity(security_fixture):
+    from backend.app.main import app
+
+    fixture = security_fixture
+    validator = MockProviderValidator(fixture["secret_a"])
+    dependency = _provider_validator_dependency()
+    app.dependency_overrides[dependency] = lambda: validator
+    owner_headers = {"Authorization": f"Bearer {fixture['token_a']}"}
+    hidden_headers = {"Authorization": f"Bearer {fixture['token_b']}"}
+    missing_key = str(uuid4())
+    missing_brand = str(uuid4())
+
+    try:
+        with TestClient(app) as client:
+            owner = client.post(
+                f"/api/v1/brands/{fixture['brand_a']}/keys/{fixture['key_a']}/validate",
+                headers=owner_headers,
+            )
+            hidden_owner = client.post(
+                f"/api/v1/brands/{fixture['brand_a']}/keys/{fixture['key_a']}/validate",
+                headers=hidden_headers,
+            )
+            wrong_path_brand = client.post(
+                f"/api/v1/brands/{fixture['brand_a']}/keys/{fixture['key_b']}/validate",
+                headers=owner_headers,
+            )
+            missing_key_response = client.post(
+                f"/api/v1/brands/{fixture['brand_a']}/keys/{missing_key}/validate",
+                headers=owner_headers,
+            )
+            missing_both = client.post(
+                f"/api/v1/brands/{missing_brand}/keys/{missing_key}/validate",
+                headers=owner_headers,
+            )
+    finally:
+        app.dependency_overrides.pop(dependency, None)
+
+    assert owner.status_code == 200
+    assert owner.json()["code"] == "VALID"
+    assert validator.calls == 1
+    hidden_responses = (
+        hidden_owner,
+        wrong_path_brand,
+        missing_key_response,
+        missing_both,
+    )
+    for response in hidden_responses:
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "PROVIDER_KEY_NOT_FOUND"
+        assert response.json()["error"]["message"] == "Provider key not found."
+
+
+def test_validity_and_active_fields_are_owner_readable_but_never_client_writable(
+    security_fixture,
+):
+    fixture = security_fixture
+    engine = fixture["engine"]
+    readable = _execute_as_authenticated(
+        engine,
+        fixture["token_a"],
+        "SELECT is_active, is_valid, last_validated_at, last_validation_error "
+        "FROM provider_keys WHERE id = :key_id",
+        {"key_id": fixture["key_a"]},
+    )
+    assert readable == [
+        {
+            "is_active": False,
+            "is_valid": None,
+            "last_validated_at": None,
+            "last_validation_error": None,
+        }
+    ]
+
+    mutations = (
+        "UPDATE provider_keys SET is_active = true WHERE id = :key_id",
+        "UPDATE provider_keys SET is_valid = true, "
+        "last_validated_at = clock_timestamp() WHERE id = :key_id",
+        "UPDATE provider_keys SET is_valid = false, "
+        "last_validated_at = clock_timestamp(), "
+        "last_validation_error = 'INVALID_CREDENTIAL' WHERE id = :key_id",
+        "UPDATE provider_keys SET validation_token = gen_random_uuid(), "
+        "validation_lease_expires_at = clock_timestamp() + interval '1 minute' "
+        "WHERE id = :key_id",
+    )
+    for token in (fixture["token_a"], fixture["token_b"]):
+        for statement in mutations:
+            _assert_permission_denied(
+                lambda statement=statement, token=token: _execute_as_authenticated(
+                    engine,
+                    token,
+                    statement,
+                    {"key_id": fixture["key_a"]},
+                )
+            )
+
+
+def test_data_api_hides_tokens_vault_and_decrypted_values_and_denies_state_patch(
+    security_fixture,
+):
+    fixture = security_fixture
+    client = fixture["client"]
+
+    def headers(token: str) -> dict[str, str]:
+        return {
+            "apikey": fixture["supabase_key"],
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+    for token in (fixture["token_a"], fixture["token_b"]):
+        internal = client.get(
+            f"{fixture['supabase_url']}/rest/v1/provider_keys",
+            headers=headers(token),
+            params={
+                "select": (
+                    "vault_secret_id,validation_token,"
+                    "validation_lease_expires_at,last_used_at"
+                )
+            },
+        )
+        decrypted = client.get(
+            f"{fixture['supabase_url']}/rest/v1/decrypted_secrets",
+            headers={**headers(token), "Accept-Profile": "vault"},
+            params={"select": "id,decrypted_secret"},
+        )
+        patch = client.patch(
+            f"{fixture['supabase_url']}/rest/v1/provider_keys",
+            headers=headers(token),
+            params={"id": f"eq.{fixture['key_a']}"},
+            json={"is_active": True, "is_valid": True},
+        )
+
+        assert internal.status_code in {400, 401, 403}
+        assert decrypted.status_code in {400, 401, 403, 404, 406}
+        assert patch.status_code in {401, 403}

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, Mock
 from uuid import UUID
 
@@ -18,12 +20,14 @@ from starlette.responses import Response
 from backend.app import auth, config, main
 from backend.app.auth import CurrentUser, get_current_user
 from backend.app.models.provider_key import ProviderKey, ProviderKeyAdd
+from backend.app.routes import provider_keys as provider_key_routes
 from backend.app.routes.provider_keys import get_provider_key_store
 from backend.app.services.brand_store import BrandCleanupRequiredError
 from backend.app.services.provider_key_store import (
     IdempotencyKeyRetiredError,
     VaultUnavailableError,
 )
+from backend.app.services import provider_key_store as provider_key_store_module
 
 
 def _request(path: str = "/api/v1/brands/brand-id/keys/key-id/validate") -> Request:
@@ -435,11 +439,118 @@ def _safe_key(**updates) -> ProviderKey:
     return ProviderKey.model_validate(values)
 
 
+@dataclass(frozen=True)
+class FakeValidationClaim:
+    attempted_at: datetime
+    key: ProviderKey
+    provider: str
+    secret: str
+    token: UUID
+    in_progress: bool = False
+
+
+@dataclass(frozen=True)
+class FakeProviderResult:
+    outcome: str
+    code: str
+    provider_request_id: str | None = None
+
+
+@dataclass(frozen=True)
+class FakeValidationCompletion:
+    key: ProviderKey
+    superseded: bool
+
+
+@dataclass
+class FakeClock:
+    current: float = 10_000.0
+
+    def monotonic(self) -> float:
+        return self.current
+
+    def advance(self, seconds: float) -> None:
+        self.current += seconds
+
+
+@dataclass
+class FakeValidationScenario:
+    before: ProviderKey = field(default_factory=_safe_key)
+    outcome: str = "valid"
+    code: str = "VALID"
+    attempted_at: datetime = datetime(2026, 7, 26, 12, tzinfo=UTC)
+    raw_key: str = RAW_KEY
+    token: UUID = UUID("66666666-6666-6666-6666-666666666666")
+    provider_request_id: str | None = "provider-request-id"
+    in_progress: bool = False
+    superseded: bool = False
+    claim_error: Exception | None = None
+    clock: FakeClock | None = None
+    pool_delay: float = 0
+    lock_delay: float = 0
+    vault_delay: float = 0
+    provider_delay: float = 0
+    completion_delay: float = 0
+    consumed_stages: list[tuple[str, float]] = field(default_factory=list)
+
+    def consume(self, stage: str, delay: float, deadline: float) -> None:
+        self.consumed_stages.append((stage, deadline))
+        if self.clock is not None:
+            self.clock.advance(delay)
+
+    def consume_claim_budget(self, deadline: float) -> None:
+        self.consume("pool", self.pool_delay, deadline)
+        self.consume("lock", self.lock_delay, deadline)
+        self.consume("vault", self.vault_delay, deadline)
+
+    def completed_key(self, result: FakeProviderResult) -> ProviderKey:
+        if result.outcome == "valid":
+            return self.before.model_copy(
+                update={
+                    "is_valid": True,
+                    "last_validated_at": self.attempted_at,
+                    "last_validation_error": None,
+                }
+            )
+        if result.outcome == "invalid":
+            return self.before.model_copy(
+                update={
+                    "is_active": False,
+                    "is_valid": False,
+                    "last_validated_at": self.attempted_at,
+                    "last_validation_error": "INVALID_CREDENTIAL",
+                }
+            )
+        return self.before
+
+
+@dataclass
+class FakeProviderValidator:
+    scenario: FakeValidationScenario
+    calls: list[tuple[str, str, float]] = field(default_factory=list)
+
+    async def validate(
+        self, provider: str, secret: str, deadline: float
+    ) -> FakeProviderResult:
+        self.calls.append((provider, secret, deadline))
+        self.scenario.consume("provider", self.scenario.provider_delay, deadline)
+        return FakeProviderResult(
+            outcome=self.scenario.outcome,
+            code=self.scenario.code,
+            provider_request_id=self.scenario.provider_request_id,
+        )
+
+
 @dataclass
 class FakeProviderKeyStore:
     keys: list[ProviderKey] = field(default_factory=list)
     error: Exception | None = None
     add_calls: list[tuple[str, UUID, ProviderKeyAdd, UUID]] = field(default_factory=list)
+    validation: FakeValidationScenario | None = None
+    claim_calls: list[tuple[str, UUID, UUID, float]] = field(default_factory=list)
+    complete_calls: list[tuple[str, UUID, UUID, UUID, Any, float]] = field(
+        default_factory=list
+    )
 
     def list_keys(self, user_id: str, brand_id: UUID) -> list[ProviderKey]:
         if self.error:
@@ -458,16 +569,64 @@ class FakeProviderKeyStore:
             raise self.error
         return self.keys[0] if self.keys else _safe_key(is_active=payload.make_active)
 
+    def claim_validation(
+        self,
+        user_id: str,
+        brand_id: UUID,
+        key_id: UUID,
+        deadline: float,
+    ) -> FakeValidationClaim:
+        self.claim_calls.append((user_id, brand_id, key_id, deadline))
+        assert self.validation is not None
+        self.validation.consume_claim_budget(deadline)
+        if self.validation.claim_error:
+            raise self.validation.claim_error
+        return FakeValidationClaim(
+            attempted_at=self.validation.attempted_at,
+            key=self.validation.before,
+            provider=self.validation.before.provider.value,
+            secret=self.validation.raw_key,
+            token=self.validation.token,
+            in_progress=self.validation.in_progress,
+        )
+
+    def complete_validation(
+        self,
+        user_id: str,
+        brand_id: UUID,
+        key_id: UUID,
+        token: UUID,
+        result: FakeProviderResult,
+        deadline: float,
+    ) -> FakeValidationCompletion:
+        self.complete_calls.append(
+            (user_id, brand_id, key_id, token, result, deadline)
+        )
+        assert self.validation is not None
+        self.validation.consume("completion", self.validation.completion_delay, deadline)
+        if self.validation.superseded:
+            return FakeValidationCompletion(self.validation.before, superseded=True)
+        return FakeValidationCompletion(self.validation.completed_key(result), superseded=False)
+
 
 @pytest.fixture
 def provider_key_client():
     store = FakeProviderKeyStore()
+    scenario = FakeValidationScenario()
+    validator = FakeProviderValidator(scenario)
+    store.validation = scenario
+    store.validator = validator
     main.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id="11111111-1111-1111-1111-111111111111",
         email="owner@example.com",
         access_token="redacted",
     )
     main.app.dependency_overrides[get_provider_key_store] = lambda: store
+    provider_dependency = getattr(
+        provider_key_routes, "get_provider_validator", None
+    )
+    if provider_dependency is not None:
+        main.app.dependency_overrides[provider_dependency] = lambda: store.validator
     try:
         with TestClient(main.app) as client:
             yield client, store
@@ -653,3 +812,386 @@ def test_add_uses_no_provider_client_dependency(provider_key_client):
         json={"provider": "openai", "key": RAW_KEY},
     )
     assert response.status_code == 201
+
+
+def _safe_key_json(key: ProviderKey) -> dict[str, Any]:
+    return {
+        "id": str(key.id),
+        "provider": key.provider.value,
+        "label": key.label,
+        "key_hint": key.key_hint,
+        "is_active": key.is_active,
+        "is_valid": key.is_valid,
+        "last_validated_at": (
+            key.last_validated_at.isoformat().replace("+00:00", "Z")
+            if key.last_validated_at
+            else None
+        ),
+        "last_validation_error": key.last_validation_error,
+        "cleanup_state": key.cleanup_state.value,
+        "created_at": key.created_at.isoformat().replace("+00:00", "Z"),
+    }
+
+
+VALIDATION_MATRIX = [
+    ("valid", "VALID"),
+    ("invalid", "INVALID_CREDENTIAL"),
+    ("temporary", "PROVIDER_TIMEOUT"),
+    ("temporary", "PROVIDER_UNAVAILABLE"),
+    ("temporary", "PROVIDER_RATE_LIMITED"),
+    ("temporary", "PROVIDER_PERMISSION"),
+    ("temporary", "VALIDATION_UNDETERMINED"),
+]
+
+
+@pytest.mark.parametrize("provider", ["openai", "gemini"])
+@pytest.mark.parametrize(("outcome", "code"), VALIDATION_MATRIX)
+def test_validate_returns_exact_outcome_matrix_and_complete_snapshot(
+    provider_key_client,
+    provider: str,
+    outcome: str,
+    code: str,
+):
+    client, store = provider_key_client
+    display_name = "OpenAI" if provider == "openai" else "Gemini"
+    before = _safe_key(
+        provider=provider,
+        is_active=True,
+        is_valid=False,
+        last_validated_at=datetime(2026, 7, 25, 9, tzinfo=UTC),
+        last_validation_error="INVALID_CREDENTIAL",
+    )
+    store.validation = FakeValidationScenario(
+        before=before,
+        outcome=outcome,
+        code=code,
+    )
+    store.validator.scenario = store.validation
+
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/validate"
+    )
+
+    expected_message = {
+        "valid": f"{display_name} accepted this API key.",
+        "invalid": f"{display_name} rejected this API key.",
+        "temporary": f"{display_name} could not validate the key right now.",
+    }[outcome]
+    result = FakeProviderResult(outcome, code)
+    expected_key = store.validation.completed_key(result)
+    assert response.status_code == 200
+    assert response.json() == {
+        "outcome": outcome,
+        "attempted_at": "2026-07-26T12:00:00Z",
+        "code": code,
+        "message": expected_message,
+        "key": _safe_key_json(expected_key),
+    }
+    assert store.claim_calls == [
+        (
+            "11111111-1111-1111-1111-111111111111",
+            BRAND_ID,
+            KEY_ID,
+            store.claim_calls[0][3],
+        )
+    ]
+    assert store.validator.calls[0][:2] == (provider, RAW_KEY)
+    assert len(store.complete_calls) == 1
+    assert RAW_KEY not in response.text
+
+
+def test_invalid_validation_deactivates_without_replacement(provider_key_client):
+    client, store = provider_key_client
+    store.validation = FakeValidationScenario(
+        before=_safe_key(is_active=True),
+        outcome="invalid",
+        code="INVALID_CREDENTIAL",
+    )
+    store.validator.scenario = store.validation
+
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/validate"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["key"] == _safe_key_json(
+        store.validation.completed_key(
+            FakeProviderResult("invalid", "INVALID_CREDENTIAL")
+        )
+    )
+    assert response.json()["key"]["is_active"] is False
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "PROVIDER_TIMEOUT",
+        "PROVIDER_UNAVAILABLE",
+        "PROVIDER_RATE_LIMITED",
+        "PROVIDER_PERMISSION",
+        "VALIDATION_UNDETERMINED",
+    ],
+)
+def test_temporary_validation_preserves_complete_snapshot_byte_for_byte(
+    provider_key_client, code: str
+):
+    client, store = provider_key_client
+    before = _safe_key(
+        is_active=True,
+        is_valid=True,
+        last_validated_at=datetime(2026, 7, 20, 8, 30, tzinfo=UTC),
+        last_validation_error=None,
+    )
+    store.validation = FakeValidationScenario(
+        before=before, outcome="temporary", code=code
+    )
+    store.validator.scenario = store.validation
+
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/validate"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["key"] == _safe_key_json(before)
+    assert store.complete_calls[0][4].code == code
+
+
+@pytest.mark.parametrize("hidden_case", ["missing", "wrong_brand", "not_owned"])
+def test_validate_path_membership_is_opaque(provider_key_client, hidden_case: str):
+    client, store = provider_key_client
+    store.validation.claim_error = LookupError(hidden_case)
+
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/validate"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "PROVIDER_KEY_NOT_FOUND"
+    assert response.json()["error"]["message"] == "Provider key not found."
+    assert response.headers["X-Request-Id"] == response.json()["error"]["request_id"]
+    assert store.validator.calls == []
+    assert store.complete_calls == []
+
+
+@pytest.mark.parametrize(
+    ("error_name", "fallback", "status_code", "code", "message"),
+    [
+        (
+            "BrandCleanupRequiredError",
+            BrandCleanupRequiredError,
+            409,
+            "BRAND_CLEANUP_REQUIRED",
+            "Brand cleanup is required. Retry deletion.",
+        ),
+        (
+            "KeyCleanupRequiredError",
+            RuntimeError,
+            409,
+            "KEY_CLEANUP_REQUIRED",
+            "Key cleanup is required. Retry deletion.",
+        ),
+        (
+            "VaultUnavailableError",
+            VaultUnavailableError,
+            502,
+            "VAULT_UNAVAILABLE",
+            "Secure key storage is unavailable right now.",
+        ),
+    ],
+)
+def test_validate_prelease_failures_use_fixed_safe_envelopes(
+    provider_key_client,
+    error_name: str,
+    fallback: type[Exception],
+    status_code: int,
+    code: str,
+    message: str,
+):
+    client, store = provider_key_client
+    error_type = getattr(provider_key_store_module, error_name, fallback)
+    store.validation.claim_error = error_type()
+
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/validate"
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["error"]["code"] == code
+    assert response.json()["error"]["message"] == message
+    assert response.headers["X-Request-Id"] == response.json()["error"]["request_id"]
+    assert store.validator.calls == []
+    assert store.complete_calls == []
+
+
+def test_overlapping_validation_returns_in_progress_without_provider_call(
+    provider_key_client,
+):
+    client, store = provider_key_client
+    before = _safe_key(
+        is_valid=True,
+        last_validated_at=datetime(2026, 7, 24, 10, tzinfo=UTC),
+    )
+    store.validation = FakeValidationScenario(before=before, in_progress=True)
+    store.validator.scenario = store.validation
+
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/validate"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "outcome": "temporary",
+        "attempted_at": "2026-07-26T12:00:00Z",
+        "code": "VALIDATION_IN_PROGRESS",
+        "message": "OpenAI could not validate the key right now.",
+        "key": _safe_key_json(before),
+    }
+    assert store.validator.calls == []
+    assert store.complete_calls == []
+
+
+def test_stale_completion_returns_superseded_latest_snapshot(provider_key_client):
+    client, store = provider_key_client
+    latest = _safe_key(
+        is_active=False,
+        is_valid=False,
+        last_validated_at=datetime(2026, 7, 26, 11, 59, tzinfo=UTC),
+        last_validation_error="INVALID_CREDENTIAL",
+    )
+    store.validation = FakeValidationScenario(
+        before=latest,
+        outcome="valid",
+        code="VALID",
+        superseded=True,
+    )
+    store.validator.scenario = store.validation
+
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/validate"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "outcome": "temporary",
+        "attempted_at": "2026-07-26T12:00:00Z",
+        "code": "VALIDATION_SUPERSEDED",
+        "message": "OpenAI could not validate the key right now.",
+        "key": _safe_key_json(latest),
+    }
+    assert len(store.validator.calls) == 1
+    assert len(store.complete_calls) == 1
+
+
+def test_validation_consumes_one_absolute_budget_across_all_route_stages(
+    provider_key_client, monkeypatch: pytest.MonkeyPatch
+):
+    client, store = provider_key_client
+    clock = FakeClock()
+    scenario = FakeValidationScenario(
+        clock=clock,
+        pool_delay=0.7,
+        lock_delay=0.8,
+        vault_delay=0.9,
+        provider_delay=8.5,
+        completion_delay=0.8,
+    )
+    store.validation = scenario
+    store.validator.scenario = scenario
+    monkeypatch.setattr(main.time, "monotonic", clock.monotonic)
+
+    async def consume_auth_budget(request: Request) -> CurrentUser:
+        clock.advance(0.6)
+        return CurrentUser(
+            user_id="11111111-1111-1111-1111-111111111111",
+            email="owner@example.com",
+            access_token="redacted",
+        )
+
+    main.app.dependency_overrides[get_current_user] = consume_auth_budget
+    started = clock.monotonic()
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/validate"
+    )
+
+    assert response.status_code == 200
+    assert clock.monotonic() - started < 15
+    deadlines = [deadline for _, deadline in scenario.consumed_stages]
+    assert deadlines == [started + 15] * 5
+    assert store.claim_calls[0][3] == started + 15
+    assert store.validator.calls[0][2] == started + 15
+    assert store.complete_calls[0][5] == started + 15
+
+
+def test_validation_response_and_logs_exclude_every_sensitive_stage_value(
+    provider_key_client, caplog: pytest.LogCaptureFixture
+):
+    client, store = provider_key_client
+    sensitive = {
+        RAW_KEY,
+        "Production Key",
+        "***A1B2",
+        "77777777-7777-7777-7777-777777777777",
+        "secret SQL bind",
+        "provider body secret",
+        "Bearer secret-token",
+        "secret exception text",
+        "66666666-6666-6666-6666-666666666666",
+        "11111111-1111-1111-1111-111111111111",
+        "owner@example.com",
+    }
+    store.validation.claim_error = VaultUnavailableError(
+        "secret exception text; secret SQL bind; provider body secret"
+    )
+    caplog.set_level(logging.INFO)
+
+    response = client.post(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/validate",
+        headers={"Authorization": "Bearer secret-token"},
+    )
+
+    assert response.status_code == 502
+    rendered_logs = "\n".join(
+        main._JsonLogFormatter().format(record) for record in caplog.records
+    )
+    observable = response.text + rendered_logs + caplog.text
+    for value in sensitive:
+        assert value not in observable
+
+
+def test_safe_validation_log_contains_only_fixed_allowlisted_metadata():
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(main._JsonLogFormatter())
+    logger = logging.getLogger("provider-validation-contract")
+    logger.handlers = [handler]
+    logger.propagate = False
+    logger.info(
+        "unsafe %s",
+        RAW_KEY,
+        extra={
+            "event": "provider_keys.validation_complete",
+            "request_id": "request-id",
+            "provider": "gemini",
+            "code": "PROVIDER_TIMEOUT",
+            "duration_ms": 14900,
+            "provider_request_id": "safe-provider-request-id",
+            "label": "Production Key",
+            "key_hint": "***A1B2",
+            "vault_secret_id": "77777777-7777-7777-7777-777777777777",
+            "authorization": "Bearer secret-token",
+            "exception": "secret exception text",
+            "user_id": "11111111-1111-1111-1111-111111111111",
+            "email": "owner@example.com",
+        },
+    )
+
+    assert json.loads(stream.getvalue()) == {
+        "level": "INFO",
+        "logger": "provider-validation-contract",
+        "event": "provider_keys.validation_complete",
+        "request_id": "request-id",
+        "provider": "gemini",
+        "code": "PROVIDER_TIMEOUT",
+        "duration_ms": 14900,
+        "provider_request_id": "safe-provider-request-id",
+    }
