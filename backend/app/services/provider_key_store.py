@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from ..config import get_engine
 from ..models.provider_key import ProviderKey, ProviderKeyAdd
@@ -30,6 +30,14 @@ class VaultUnavailableError(ProviderKeyStoreError):
 
 
 class KeyCleanupRequiredError(ProviderKeyStoreError):
+    pass
+
+
+class KeyInvalidError(ProviderKeyStoreError):
+    pass
+
+
+class KeyActivationConflictError(ProviderKeyStoreError):
     pass
 
 
@@ -197,6 +205,76 @@ class ProviderKeyStore:
             raise
         except SQLAlchemyError as exc:
             raise VaultUnavailableError from exc
+
+    def activate_key(
+        self,
+        user_id: str,
+        brand_id: UUID,
+        key_id: UUID,
+    ) -> ProviderKey:
+        try:
+            with self.engine.begin() as connection:
+                brand = BrandStore.lock_owned_brand(connection, user_id, brand_id)
+                row = connection.execute(
+                    text(
+                        f"""
+                        SELECT {_SAFE_COLUMNS}
+                        FROM provider_keys
+                        WHERE brand_id = :brand_id AND id = :key_id
+                        FOR UPDATE
+                        """
+                    ),
+                    {"brand_id": brand_id, "key_id": key_id},
+                ).mappings().one_or_none()
+                if row is None:
+                    raise LookupError("Provider key not found.")
+
+                # Path membership is resolved before lifecycle conflicts are exposed.
+                BrandStore.require_normal_brand(brand)
+                if row["lifecycle"] != "normal":
+                    raise KeyCleanupRequiredError
+                if row["is_valid"] is False:
+                    raise KeyInvalidError
+
+                connection.execute(
+                    text(
+                        "UPDATE provider_keys SET is_active = false "
+                        "WHERE brand_id = :brand_id "
+                        "AND provider = CAST(:provider AS provider_t) "
+                        "AND is_active"
+                    ),
+                    {"brand_id": brand_id, "provider": row["provider"]},
+                )
+                activated = connection.execute(
+                    text(
+                        f"""
+                        UPDATE provider_keys
+                        SET is_active = true
+                        WHERE id = :key_id
+                        RETURNING {_SAFE_COLUMNS}
+                        """
+                    ),
+                    {"key_id": key_id},
+                ).mappings().one()
+            return self._to_provider_key(activated)
+        except (
+            LookupError,
+            BrandCleanupRequiredError,
+            KeyCleanupRequiredError,
+            KeyInvalidError,
+        ):
+            raise
+        except IntegrityError as exc:
+            original = exc.orig
+            constraint_name = getattr(
+                getattr(original, "diag", None), "constraint_name", None
+            )
+            if (
+                getattr(original, "pgcode", None) == "23505"
+                and constraint_name == "uq_provider_keys_one_active"
+            ):
+                raise KeyActivationConflictError from exc
+            raise
 
     def claim_validation(
         self,

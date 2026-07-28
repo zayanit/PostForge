@@ -121,7 +121,7 @@ for both providers and verify only accepted/explicit-invalid outcomes persist ch
 - [X] T031 [US2] Extend `backend/tests/integration/test_provider_key_rls.py` with owner/non-owner/nonexistent validate parity and assertions that direct clients cannot read or mutate validation tokens, lease expiries, Vault IDs, decrypted values, validity fields, or active state
 - [X] T032 [US2] Add deadline and secrecy regression cases to `backend/tests/contract/test_provider_keys.py` that consume budget during authentication, pool checkout, lock/Vault access, provider I/O, and completion; assert every leased request settles within 15 seconds and captured logs/errors omit keys, binds, labels, hints, Vault IDs, provider content, headers, exception text, tokens, and PII
 - [X] T033 [US2] Extend `frontend/tests/e2e/provider-keys.spec.ts` with mocked valid, explicit-invalid, temporary, timeout, and already-in-progress UI outcomes, including invalid active-key deactivation and preservation of prior status on temporary outcomes
-- [ ] T034 [US2] Execute Quickstart Scenario 2's deterministic steps from `specs/004-provider-keys/quickstart.md` and run `backend/tests/unit/test_provider_validation.py`, the validation cases in `backend/tests/contract/test_provider_keys.py`, `backend/tests/integration/test_provider_keys.py`, and `frontend/tests/e2e/provider-keys.spec.ts`
+- [X] T034 [US2] Execute Quickstart Scenario 2's deterministic steps from `specs/004-provider-keys/quickstart.md` and run `backend/tests/unit/test_provider_validation.py`, the validation cases in `backend/tests/contract/test_provider_keys.py`, `backend/tests/integration/test_provider_keys.py`, and `frontend/tests/e2e/provider-keys.spec.ts`
 
 **Checkpoint**: Both providers validate safely without generation, false invalidation, or
 late-result corruption.
@@ -139,15 +139,15 @@ terminal state must satisfy the database active-key and invalid-inactive constra
 
 ### Tests for User Story 3
 
-- [ ] T035 [P] [US3] Extend `backend/tests/contract/test_provider_keys.py` with failing tests for `PATCH /api/v1/brands/{brand_id}/keys/{key_id}/activate`: successful safe shape, unvalidated eligibility, atomic prior deactivation, other-provider preservation, known-invalid block, key/brand cleanup conflicts, opaque path ownership, and no provider call
-- [ ] T036 [P] [US3] Extend `backend/tests/integration/test_provider_key_cleanup.py` with failing real-Supabase concurrency tests for simultaneous activation of two same-provider keys, provider-independent activation, activation versus invalid validation in both lock orderings, database unique/check invariants, and safe conflict responses without leaked SQL details
+- [X] T035 [P] [US3] Extend `backend/tests/contract/test_provider_keys.py` with failing tests for `PATCH /api/v1/brands/{brand_id}/keys/{key_id}/activate`: successful safe shape, unvalidated eligibility, atomic prior deactivation, other-provider preservation, known-invalid block, key/brand cleanup conflicts, opaque path ownership, and no provider call
+- [X] T036 [P] [US3] Extend `backend/tests/integration/test_provider_key_cleanup.py` with failing real-Supabase concurrency tests for simultaneous activation of two same-provider keys, provider-independent activation, activation versus invalid validation in both lock orderings, database unique/check invariants, and safe conflict responses without leaked SQL details
 
 ### Implementation for User Story 3
 
-- [ ] T037 [US3] Extend `backend/app/services/provider_key_store.py` with atomic activation that locks brand then target key, rejects fenced/known-invalid targets, deactivates only the current active row for the same provider, activates the target in one transaction, and converts uniqueness races to a fixed safe retry outcome while ensuring no completed ordering leaves an invalid key active
-- [ ] T038 [US3] Add the activate handler and fixed `KEY_INVALID`, `KEY_CLEANUP_REQUIRED`, `BRAND_CLEANUP_REQUIRED`, and opaque-not-found mappings to `backend/app/routes/provider_keys.py`
-- [ ] T039 [US3] Extend `frontend/app/(dashboard)/brands/[brandId]/keys/page.tsx` with activate controls for eligible inactive keys, disabled controls for invalid/cleanup states, independent provider refresh, fixed conflict feedback, and defensive loading-state cleanup
-- [ ] T040 [US3] Execute Quickstart Scenario 4 steps 1-2 from `specs/004-provider-keys/quickstart.md` and run the activation cases in `backend/tests/contract/test_provider_keys.py`, `backend/tests/integration/test_provider_key_cleanup.py`, and `frontend/tests/e2e/provider-keys.spec.ts`
+- [X] T037 [US3] Extend `backend/app/services/provider_key_store.py` with atomic activation that locks brand then target key, rejects fenced/known-invalid targets, deactivates only the current active row for the same provider, activates the target in one transaction, and converts uniqueness races to a fixed safe retry outcome while ensuring no completed ordering leaves an invalid key active
+- [X] T038 [US3] Add the activate handler and fixed `KEY_INVALID`, `KEY_CLEANUP_REQUIRED`, `BRAND_CLEANUP_REQUIRED`, and opaque-not-found mappings to `backend/app/routes/provider_keys.py`
+- [X] T039 [US3] Extend `frontend/app/(dashboard)/brands/[brandId]/keys/page.tsx` with activate controls for eligible inactive keys, disabled controls for invalid/cleanup states, independent provider refresh, fixed conflict feedback, and defensive loading-state cleanup
+- [X] T040 [US3] Execute Quickstart Scenario 4 steps 1-2 from `specs/004-provider-keys/quickstart.md` and run the activation cases in `backend/tests/contract/test_provider_keys.py`, `backend/tests/integration/test_provider_key_cleanup.py`, and `frontend/tests/e2e/provider-keys.spec.ts`
 
 **Checkpoint**: Rotation is atomic, provider-independent, and safe under concurrency.
 

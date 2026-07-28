@@ -26,6 +26,7 @@ test("adds, groups, and reloads safe provider-key metadata", async ({ page }) =>
   let requestWasOpaque = true;
   let responseWasOpaque = true;
   let validationRequests = 0;
+  let activationRequests = 0;
   let brandCleanupState: "normal" | "cleanup_required" = "normal";
   let validationMode:
     | "valid"
@@ -113,6 +114,37 @@ test("adds, groups, and reloads safe provider-key metadata", async ({ page }) =>
       const body = JSON.stringify(added);
       responseWasOpaque &&= !Object.values(rawKeys).some((key) => body.includes(key));
       await route.fulfill({ status: 201, contentType: "application/json", body });
+      return;
+    }
+
+    const activationMatch = url.pathname.match(
+      new RegExp(`^/api/v1/brands/${brandId}/keys/([^/]+)/activate$`)
+    );
+    if (activationMatch && request.method() === "PATCH") {
+      activationRequests += 1;
+      const key = savedKeys.find((item) => item.id === activationMatch[1]);
+      if (!key) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "PROVIDER_KEY_NOT_FOUND" } }),
+        });
+        return;
+      }
+      if (key.is_valid === false) {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "KEY_INVALID" } }),
+        });
+        return;
+      }
+      savedKeys.forEach((item) => {
+        if (item.provider === key.provider) item.is_active = item.id === key.id;
+      });
+      const body = JSON.stringify(key);
+      responseWasOpaque &&= !Object.values(rawKeys).some((rawKey) => body.includes(rawKey));
+      await route.fulfill({ status: 200, contentType: "application/json", body });
       return;
     }
 
@@ -214,6 +246,9 @@ test("adds, groups, and reloads safe provider-key metadata", async ({ page }) =>
   await expect(openAIKey.getByText("Valid", { exact: true })).toBeVisible();
   await expect(openAIKey.getByText(/^Last validated /)).toBeVisible();
   await expect(openAIKey.getByRole("status")).toHaveText("The provider accepted this key.");
+  await openAIKey.getByRole("button", { name: "Activate key" }).click();
+  await expect(openAIKey.getByText("Active", { exact: true })).toBeVisible();
+  await expect(openAIKey.getByRole("status")).toHaveText("Key activated.");
 
   const validatedText = await openAIKey.getByText(/^Last validated /).textContent();
   validationMode = "unavailable";
@@ -257,10 +292,12 @@ test("adds, groups, and reloads safe provider-key metadata", async ({ page }) =>
   await expect(geminiKey.getByText("Invalid", { exact: true })).toBeVisible();
   await expect(geminiKey.getByText("Inactive", { exact: true })).toBeVisible();
   await expect(geminiKey.getByRole("status")).toHaveText("The provider rejected this key.");
+  await expect(geminiKey.getByRole("button", { name: "Activate key" })).toBeDisabled();
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Provider keys" })).toBeVisible();
   await expect(page.getByText("***A1B2")).toBeVisible();
+  await expect(page.getByText("Active", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Gemini" }).click();
   await expect(page.getByText("***G3D4")).toBeVisible();
   const visibleText = (await page.locator("body").textContent()) ?? "";
@@ -279,6 +316,12 @@ test("adds, groups, and reloads safe provider-key metadata", async ({ page }) =>
     page
       .getByRole("article")
       .filter({ hasText: "Inactive OpenAI" })
+      .getByRole("button", { name: "Activate key" })
+  ).toBeDisabled();
+  await expect(
+    page
+      .getByRole("article")
+      .filter({ hasText: "Inactive OpenAI" })
       .getByRole("button", { name: "Validate key" })
   ).toBeDisabled();
 
@@ -290,12 +333,19 @@ test("adds, groups, and reloads safe provider-key metadata", async ({ page }) =>
     page
       .getByRole("article")
       .filter({ hasText: "Inactive OpenAI" })
+      .getByRole("button", { name: "Activate key" })
+  ).toBeDisabled();
+  await expect(
+    page
+      .getByRole("article")
+      .filter({ hasText: "Inactive OpenAI" })
       .getByRole("button", { name: "Validate key" })
   ).toBeDisabled();
   await expect(page.getByLabel("API key")).toBeDisabled();
 
   expect(submittedKeyBodies === 2).toBeTruthy();
   expect(validationRequests).toBe(6);
+  expect(activationRequests).toBe(1);
   expect(requestWasOpaque).toBeTruthy();
   expect(responseWasOpaque).toBeTruthy();
   expect(rawKeyIsVisible).toBeFalsy();

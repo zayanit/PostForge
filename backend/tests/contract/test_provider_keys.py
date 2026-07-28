@@ -546,6 +546,7 @@ class FakeProviderKeyStore:
     keys: list[ProviderKey] = field(default_factory=list)
     error: Exception | None = None
     add_calls: list[tuple[str, UUID, ProviderKeyAdd, UUID]] = field(default_factory=list)
+    activate_calls: list[tuple[str, UUID, UUID]] = field(default_factory=list)
     validation: FakeValidationScenario | None = None
     claim_calls: list[tuple[str, UUID, UUID, float]] = field(default_factory=list)
     complete_calls: list[tuple[str, UUID, UUID, UUID, Any, float]] = field(
@@ -568,6 +569,29 @@ class FakeProviderKeyStore:
         if self.error:
             raise self.error
         return self.keys[0] if self.keys else _safe_key(is_active=payload.make_active)
+
+    def activate_key(
+        self,
+        user_id: str,
+        brand_id: UUID,
+        key_id: UUID,
+    ) -> ProviderKey:
+        self.activate_calls.append((user_id, brand_id, key_id))
+        if self.error:
+            raise self.error
+        target = next((key for key in self.keys if key.id == key_id), None)
+        if target is None:
+            target = _safe_key(id=key_id, is_active=False)
+        activated = target.model_copy(update={"is_active": True})
+        self.keys = [
+            activated
+            if key.id == key_id
+            else key.model_copy(update={"is_active": False})
+            if key.provider == target.provider
+            else key
+            for key in self.keys
+        ]
+        return activated
 
     def claim_validation(
         self,
@@ -812,6 +836,133 @@ def test_add_uses_no_provider_client_dependency(provider_key_client):
         json={"provider": "openai", "key": RAW_KEY},
     )
     assert response.status_code == 201
+
+
+def test_activate_returns_exact_safe_shape_and_accepts_unvalidated_key(
+    provider_key_client,
+):
+    client, store = provider_key_client
+    store.keys = [_safe_key(is_active=False, is_valid=None)]
+
+    response = client.patch(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/activate"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == _safe_key_json(_safe_key(is_active=True, is_valid=None))
+    assert store.activate_calls == [
+        ("11111111-1111-1111-1111-111111111111", BRAND_ID, KEY_ID)
+    ]
+    assert store.validator.calls == []
+    assert {
+        "brand_id",
+        "vault_secret_id",
+        "lifecycle",
+        "validation_token",
+        "updated_at",
+    }.isdisjoint(response.json())
+
+
+def test_activate_deactivates_only_prior_key_for_same_provider(provider_key_client):
+    client, store = provider_key_client
+    prior_id = UUID("77777777-7777-7777-7777-777777777777")
+    gemini_id = UUID("88888888-8888-8888-8888-888888888888")
+    store.keys = [
+        _safe_key(id=KEY_ID, is_active=False),
+        _safe_key(id=prior_id, is_active=True),
+        _safe_key(id=gemini_id, provider="gemini", is_active=True),
+    ]
+
+    response = client.patch(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/activate"
+    )
+
+    assert response.status_code == 200
+    states = {key.id: key.is_active for key in store.keys}
+    assert states == {KEY_ID: True, prior_id: False, gemini_id: True}
+
+
+@pytest.mark.parametrize(
+    ("error_name", "fallback", "code", "message"),
+    [
+        (
+            "KeyInvalidError",
+            RuntimeError,
+            "KEY_INVALID",
+            "Validate this key successfully before activating it.",
+        ),
+        (
+            "KeyCleanupRequiredError",
+            RuntimeError,
+            "KEY_CLEANUP_REQUIRED",
+            "Key cleanup is required. Retry deletion.",
+        ),
+        (
+            "BrandCleanupRequiredError",
+            BrandCleanupRequiredError,
+            "BRAND_CLEANUP_REQUIRED",
+            "Brand cleanup is required. Retry deletion.",
+        ),
+        (
+            "KeyActivationConflictError",
+            RuntimeError,
+            "BRAND_MUTATION_IN_PROGRESS",
+            "A brand update is in progress. Retry shortly.",
+        ),
+    ],
+)
+def test_activate_conflicts_use_fixed_safe_envelopes(
+    provider_key_client,
+    error_name: str,
+    fallback: type[Exception],
+    code: str,
+    message: str,
+):
+    client, store = provider_key_client
+    error_type = (
+        BrandCleanupRequiredError
+        if error_name == "BrandCleanupRequiredError"
+        else getattr(provider_key_store_module, error_name, fallback)
+    )
+    store.error = error_type()
+
+    response = client.patch(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/activate"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == code
+    assert response.json()["error"]["message"] == message
+    assert response.headers["X-Request-Id"] == response.json()["error"]["request_id"]
+    assert store.validator.calls == []
+
+
+@pytest.mark.parametrize("hidden_case", ["missing", "wrong_brand", "not_owned"])
+def test_activate_path_membership_is_opaque(provider_key_client, hidden_case: str):
+    client, store = provider_key_client
+    store.error = LookupError(hidden_case)
+
+    response = client.patch(
+        f"/api/v1/brands/{BRAND_ID}/keys/{KEY_ID}/activate"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "PROVIDER_KEY_NOT_FOUND"
+    assert response.json()["error"]["message"] == "Provider key not found."
+    assert response.headers["X-Request-Id"] == response.json()["error"]["request_id"]
+    assert store.validator.calls == []
+
+
+def test_activate_rejects_malformed_path_before_store(provider_key_client):
+    client, store = provider_key_client
+
+    response = client.patch(
+        f"/api/v1/brands/{BRAND_ID}/keys/not-a-uuid/activate"
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert store.activate_calls == []
 
 
 def _safe_key_json(key: ProviderKey) -> dict[str, Any]:

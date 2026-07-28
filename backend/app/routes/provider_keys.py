@@ -24,7 +24,9 @@ from ..models.provider_key import (
 from ..services.brand_store import BrandCleanupRequiredError
 from ..services.provider_key_store import (
     IdempotencyKeyRetiredError,
+    KeyActivationConflictError,
     KeyCleanupRequiredError,
+    KeyInvalidError,
     ProviderKeyStore,
     VaultUnavailableError,
     get_provider_key_store,
@@ -75,6 +77,38 @@ def _validation_error(exc: Exception) -> HTTPException:
         status.HTTP_502_BAD_GATEWAY,
         "VAULT_UNAVAILABLE",
         "Secure key storage is unavailable right now.",
+    )
+
+
+def _activation_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, LookupError):
+        return _error(
+            status.HTTP_404_NOT_FOUND,
+            "PROVIDER_KEY_NOT_FOUND",
+            "Provider key not found.",
+        )
+    if isinstance(exc, BrandCleanupRequiredError):
+        return _error(
+            status.HTTP_409_CONFLICT,
+            "BRAND_CLEANUP_REQUIRED",
+            "Brand cleanup is required. Retry deletion.",
+        )
+    if isinstance(exc, KeyCleanupRequiredError):
+        return _error(
+            status.HTTP_409_CONFLICT,
+            "KEY_CLEANUP_REQUIRED",
+            "Key cleanup is required. Retry deletion.",
+        )
+    if isinstance(exc, KeyInvalidError):
+        return _error(
+            status.HTTP_409_CONFLICT,
+            "KEY_INVALID",
+            "Validate this key successfully before activating it.",
+        )
+    return _error(
+        status.HTTP_409_CONFLICT,
+        "BRAND_MUTATION_IN_PROGRESS",
+        "A brand update is in progress. Retry shortly.",
     )
 
 
@@ -193,6 +227,41 @@ def add_provider_key(
         "provider_keys.add_success",
         extra={
             "event": "provider_keys.add_success",
+            "request_id": getattr(request.state, "request_id", "unknown"),
+            "provider": key.provider.value,
+        },
+    )
+    return key
+
+
+@router.patch(
+    "/{brand_id}/keys/{key_id}/activate",
+    response_model=ProviderKey,
+)
+def activate_provider_key(
+    request: Request,
+    brand_id: UUID,
+    key_id: UUID,
+    current_user: CurrentUserDep,
+    provider_key_store: ProviderKeyStoreDep,
+) -> ProviderKey:
+    try:
+        key = provider_key_store.activate_key(
+            current_user.user_id, brand_id, key_id
+        )
+    except (
+        LookupError,
+        BrandCleanupRequiredError,
+        KeyCleanupRequiredError,
+        KeyInvalidError,
+        KeyActivationConflictError,
+    ) as exc:
+        raise _activation_error(exc) from exc
+
+    logger.info(
+        "provider_keys.activate_success",
+        extra={
+            "event": "provider_keys.activate_success",
             "request_id": getattr(request.state, "request_id", "unknown"),
             "provider": key.provider.value,
         },

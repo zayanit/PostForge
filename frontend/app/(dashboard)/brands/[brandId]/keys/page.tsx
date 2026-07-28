@@ -114,6 +114,21 @@ function validationErrorMessage(code?: string) {
   }
 }
 
+function activationErrorMessage(code?: string) {
+  switch (code) {
+    case "KEY_INVALID":
+      return "Validate this key successfully before activating it.";
+    case "KEY_CLEANUP_REQUIRED":
+      return "Key cleanup is required before this key can be activated.";
+    case "BRAND_CLEANUP_REQUIRED":
+      return "Brand cleanup is required before a key can be activated.";
+    case "BRAND_MUTATION_IN_PROGRESS":
+      return "Another brand update is in progress. Retry shortly.";
+    default:
+      return "Unable to activate this key.";
+  }
+}
+
 export default function ProviderKeysPage() {
   const { brandId } = useParams<{ brandId: string }>();
   const router = useRouter();
@@ -121,6 +136,7 @@ export default function ProviderKeysPage() {
   const keyInputRef = useRef<HTMLInputElement>(null);
   const retryIdRef = useRef<string | null>(null);
   const validatingKeyIdsRef = useRef(new Set<string>());
+  const activatingKeyIdsRef = useRef(new Set<string>());
   const [brand, setBrand] = useState<Brand | null>(null);
   const [keys, setKeys] = useState<ProviderKey[]>([]);
   const [provider, setProvider] = useState<Provider>("openai");
@@ -134,7 +150,13 @@ export default function ProviderKeysPage() {
   const [validatingKeyIds, setValidatingKeyIds] = useState<Set<string>>(
     () => new Set()
   );
+  const [activatingKeyIds, setActivatingKeyIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [validationFeedbackByKey, setValidationFeedbackByKey] = useState<
+    Record<string, ValidationFeedback>
+  >({});
+  const [activationFeedbackByKey, setActivationFeedbackByKey] = useState<
     Record<string, ValidationFeedback>
   >({});
 
@@ -271,6 +293,11 @@ export default function ProviderKeysPage() {
 
     validatingKeyIdsRef.current.add(keyId);
     setValidatingKeyIds((current) => new Set(current).add(keyId));
+    setActivationFeedbackByKey((current) => {
+      const next = { ...current };
+      delete next[keyId];
+      return next;
+    });
     setValidationFeedbackByKey((current) => {
       const next = { ...current };
       delete next[keyId];
@@ -328,6 +355,86 @@ export default function ProviderKeysPage() {
     } finally {
       validatingKeyIdsRef.current.delete(keyId);
       setValidatingKeyIds((current) => {
+        const next = new Set(current);
+        next.delete(keyId);
+        return next;
+      });
+    }
+  }
+
+  async function activateKey(keyId: string) {
+    if (activatingKeyIdsRef.current.has(keyId)) return;
+
+    activatingKeyIdsRef.current.add(keyId);
+    setActivatingKeyIds((current) => new Set(current).add(keyId));
+    setValidationFeedbackByKey((current) => {
+      const next = { ...current };
+      delete next[keyId];
+      return next;
+    });
+    setActivationFeedbackByKey((current) => {
+      const next = { ...current };
+      delete next[keyId];
+      return next;
+    });
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const session = data.session;
+      if (!session) {
+        router.push("/login");
+        return;
+      }
+
+      const response = await fetch(
+        `${apiBase}/v1/brands/${encodeURIComponent(brandId)}/keys/${encodeURIComponent(keyId)}/activate`,
+        {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        }
+      );
+      const body = (await response.json().catch(() => null)) as
+        | ProviderKey
+        | ErrorResponse
+        | null;
+      if (!response.ok) {
+        setActivationFeedbackByKey((current) => ({
+          ...current,
+          [keyId]: {
+            message: activationErrorMessage(
+              (body as ErrorResponse | null)?.error?.code
+            ),
+            tone: "error",
+          },
+        }));
+        return;
+      }
+
+      const activatedKey = body as ProviderKey;
+      setKeys((current) =>
+        current.map((key) =>
+          key.id === activatedKey.id
+            ? activatedKey
+            : key.provider === activatedKey.provider
+              ? { ...key, is_active: false }
+              : key
+        )
+      );
+      setActivationFeedbackByKey((current) => ({
+        ...current,
+        [keyId]: { message: "Key activated.", tone: "success" },
+      }));
+    } catch {
+      setActivationFeedbackByKey((current) => ({
+        ...current,
+        [keyId]: {
+          message: "Unable to activate this key. Refresh its status before trying again.",
+          tone: "error",
+        },
+      }));
+    } finally {
+      activatingKeyIdsRef.current.delete(keyId);
+      setActivatingKeyIds((current) => {
         const next = new Set(current);
         next.delete(keyId);
         return next;
@@ -416,11 +523,18 @@ export default function ProviderKeysPage() {
           ) : (
             providerKeys.map((key) => {
               const isValidating = validatingKeyIds.has(key.id);
-              const feedback = validationFeedbackByKey[key.id];
+              const isActivating = activatingKeyIds.has(key.id);
+              const feedback =
+                activationFeedbackByKey[key.id] ?? validationFeedbackByKey[key.id];
               const validationDisabled =
                 isValidating ||
                 cleanupRequired ||
                 key.cleanup_state === "cleanup_required";
+              const activationDisabled =
+                isActivating ||
+                cleanupRequired ||
+                key.cleanup_state === "cleanup_required" ||
+                key.is_valid === false;
 
               return (
                 <article className="rounded-xl border bg-white p-5 shadow-sm" key={key.id}>
@@ -452,14 +566,26 @@ export default function ProviderKeysPage() {
                           : "Not yet validated"}
                       </p>
                     </div>
-                    <button
-                      className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      type="button"
-                      disabled={validationDisabled}
-                      onClick={() => void validateKey(key.id)}
-                    >
-                      {isValidating ? "Validating..." : "Validate key"}
-                    </button>
+                    <div className="flex gap-2">
+                      {!key.is_active ? (
+                        <button
+                          className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          type="button"
+                          disabled={activationDisabled}
+                          onClick={() => void activateKey(key.id)}
+                        >
+                          {isActivating ? "Activating..." : "Activate key"}
+                        </button>
+                      ) : null}
+                      <button
+                        className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        type="button"
+                        disabled={validationDisabled}
+                        onClick={() => void validateKey(key.id)}
+                      >
+                        {isValidating ? "Validating..." : "Validate key"}
+                      </button>
+                    </div>
                   </div>
                   {feedback ? (
                     <p
