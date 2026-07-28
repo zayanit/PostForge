@@ -1,122 +1,102 @@
 # PostForge
 
-PostForge is a multi-brand SaaS for generating social-media images. Users create
-brands, complete a short brand-kit interview, connect their own OpenAI/Gemini API
-keys (BYOK — no billing in MVP), and generate PNG images sized for each platform.
+PostForge is a multi-brand SaaS for managing brand identities and securely connecting OpenAI and Google Gemini API keys (BYOK). The current product includes authentication, profiles, Brand CRUD, provider-key storage/validation/activation/deletion, retryable Vault and Storage cleanup, and a Docker deployment image.
 
-The full product design — database schema, API surface, generation pipeline,
-frontend structure, and build order — lives in [`docs/implementation-plan.md`](docs/implementation-plan.md).
-The non-negotiable product rules (brand-based tenancy, hard delete, key secrecy,
-official-endpoints-only, PNG-only output) live in
-[`.specify/memory/constitution.md`](.specify/memory/constitution.md).
+Brand Kit interviews and image generation are planned but are not implemented yet. Live disposable OpenAI/Gemini validation remains a release-verification step; deterministic provider tests and all local automated checks are in place.
 
-**Current status**: account authentication/profile management, Docker packaging,
-and Brand CRUD are implemented. Brand kits, provider keys, and image generation
-are designed but not yet built.
+## Technology
 
-## Tech stack
+- Frontend: Next.js 15, React, TypeScript, Tailwind CSS
+- Backend: FastAPI, Python, SQLAlchemy
+- Platform: Supabase Auth, PostgreSQL, Vault, Storage, and local Docker
+- Deployment: one combined container for Bunny Magic Containers
 
-| Layer | Technology |
-|---|---|
-| Frontend | Next.js 15 (App Router, TypeScript) |
-| Backend | FastAPI (Python 3.11) |
-| Auth, database, storage | Supabase |
-| Hosting | Bunny Magic Containers (single container image) |
-| Image providers | OpenAI, Google Gemini |
+## Run Locally
 
-## Prerequisites
+### Prerequisites
 
-- Node.js 20.x
-- Python 3.11+
-- [Supabase CLI](https://supabase.com/docs/guides/cli) and Docker (Supabase's local
-  stack runs in containers)
-- Docker, if you want to build/run the packaged container image
+Install Node.js 20.x, Python 3.11+, Docker Desktop, and the [Supabase CLI](https://supabase.com/docs/guides/cli). Run all commands below from the repository root.
 
-## Local development setup
-
-### 1. Start Supabase
+### 1. Install dependencies
 
 ```bash
-supabase start
+make install
 ```
 
-This starts a local Postgres instance, Supabase Auth, Studio, and a local mail
-inbox (Mailpit) for testing signup/password-reset emails. `supabase start` prints
-the local API URL and keys you'll need below.
-
-### 2. Backend
+### 2. Start Supabase
 
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-dev.txt
-
-cp .env.example .env
-# then fill in SUPABASE_URL, SUPABASE_SECRET_KEY, SUPABASE_JWT_SECRET, DATABASE_URL
-# with the values `supabase start` printed
-
-uvicorn app.main:app --reload --port 8000
+make supabase-start
+supabase status
 ```
 
-### 3. Frontend
+Keep the status output available. You need its `API_URL`, `SECRET_KEY`, `JWT_SECRET`, `DB_URL`, and `PUBLISHABLE_KEY` values.
+
+### 3. Configure the backend
 
 ```bash
-cd frontend
-npm install
-
-cp .env.local.example .env.local
-# then fill in NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-
-npm run dev
+cp backend/.env.example backend/.env
 ```
 
-Visit `http://localhost:3000`.
+Open `backend/.env` and set:
 
-## Testing
-
-```bash
-# Backend — run from the repository root, not backend/ (imports are backend.app.*)
-backend/.venv/bin/python -m pytest backend/tests -q
-
-# Frontend type-check
-cd frontend && npx tsc --noEmit
-
-# Frontend end-to-end (requires the dev server and Supabase running)
-cd frontend && npx playwright test
+```dotenv
+SUPABASE_URL=http://127.0.0.1:54321
+SUPABASE_SECRET_KEY=<SECRET_KEY from supabase status>
+SUPABASE_JWT_SECRET=<JWT_SECRET from supabase status>
+DATABASE_URL=<DB_URL from supabase status>
 ```
 
-Backend integration tests that hit real Supabase endpoints skip themselves
-automatically if `SUPABASE_URL`/`SUPABASE_SECRET_KEY` aren't set.
+`DATABASE_URL` is backend-only. Never put it in a `NEXT_PUBLIC_*` variable or commit `backend/.env`.
 
-## Running as a single container
-
-The app also builds into one deployable container image (frontend + backend, one
-public port):
+### 4. Configure the frontend
 
 ```bash
+cp frontend/.env.local.example frontend/.env.local
+```
+
+Set `NEXT_PUBLIC_SUPABASE_URL` to the local `API_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `PUBLISHABLE_KEY`. Leave `NEXT_PUBLIC_API_URL=/api` and `NEXT_SERVER_API_URL=http://127.0.0.1:8000` unchanged.
+
+### 5. Start the application
+
+Use one terminal for the backend and another for the frontend:
+
+```bash
+# Terminal 1
+make dev-backend
+
+# Terminal 2
+make dev-frontend
+```
+
+Open [http://localhost:3000](http://localhost:3000), create an account, confirm it through the local Mailpit inbox if required, and create a brand. Provider keys are available from the brand’s **Manage provider keys** page.
+
+To stop Supabase later:
+
+```bash
+make supabase-stop
+```
+
+## Test and Build
+
+```bash
+make test-backend                    # Full backend suite; requires Supabase for integration tests
+cd frontend && npm run lint          # ESLint
+cd frontend && npx tsc --noEmit     # TypeScript check
+cd frontend && npm run build         # Production frontend build
+cd frontend && npx playwright test  # Browser tests
 docker build --platform linux/amd64 -t postforge:local .
-docker run -d --name postforge --platform linux/amd64 --env-file .env.docker -p 3000:3000 postforge:local
 ```
 
-See [`docs/docker.md`](docs/docker.md) for the full required environment variables,
-healthcheck/restart behavior, and how to deploy to Bunny Magic Containers.
+## Project Layout
 
-## Project structure
-
-```
-frontend/     Next.js app (App Router)
-backend/      FastAPI app
-supabase/     Postgres migrations, Auth/RLS config
-specs/        Spec-kit feature specs, plans, and tasks (see below)
-docs/         Implementation plan and Docker runbook
-Dockerfile, scripts/   Single-container packaging
+```text
+frontend/   Next.js application and Playwright tests
+backend/    FastAPI application and pytest suites
+supabase/   PostgreSQL migrations, Auth, RLS, Vault, and Storage configuration
+specs/      Feature specifications, plans, contracts, and task checklists
+docs/       Docker and deployment runbooks
+scripts/    Container entrypoint and healthcheck helpers
 ```
 
-## How this project is developed
-
-Features are specified, planned, and task-broken-down before implementation using
-[GitHub spec-kit](https://github.com/github/spec-kit). Each feature has its own
-directory under `specs/NNN-feature-name/` with a spec, implementation plan,
-research notes, and a task list. See [`CLAUDE.md`](CLAUDE.md) for more detail on
-this workflow and the codebase's architecture.
+Read [docs/docker.md](docs/docker.md) for container deployment and [AGENTS.md](AGENTS.md) for contributor guidance. Product constraints are documented in [.specify/memory/constitution.md](.specify/memory/constitution.md).
