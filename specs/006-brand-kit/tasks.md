@@ -43,19 +43,19 @@
 
 ### Tests first
 
-- [ ] T015 [P] [US1] Add contract tests in `backend/tests/contract/test_brand_kits.py` for `GET` with no row returning `not_started`, valid `PUT` returning `complete`, optional tagline/avoid-words omission, and response fields matching `contracts/brand-kit.md`.
-- [ ] T016 [P] [US1] Add unit tests in `backend/tests/unit/test_brand_kit_store.py` for deterministic summary text containing brand name, tagline, tone, audience, colors, and `None specified` for omitted optional answers.
-- [ ] T017 [P] [US1] Add integration coverage in `backend/tests/integration/test_brand_kits.py` for creating a real brand, saving a complete kit, reading it back, editing it, and confirming only one `brand_kits` row exists.
+- [X] T015 [P] [US1] Add contract tests in `backend/tests/contract/test_brand_kits.py` for `GET` with no row returning `not_started`, valid `PUT` returning `complete`, optional tagline/avoid-words omission, and response fields matching `contracts/brand-kit.md`.
+- [X] T016 [P] [US1] Add unit tests in `backend/tests/unit/test_brand_kit_store.py` for deterministic summary text containing brand name, tagline, tone, audience, colors, and `None specified` for omitted optional answers.
+- [X] T017 [P] [US1] Add integration coverage in `backend/tests/integration/test_brand_kits.py` for creating a real brand, saving a complete kit, reading it back, editing it, and confirming only one `brand_kits` row exists.
 
 ### Implementation
 
-- [ ] T018 [US1] Implement `BrandKitStore.get_kit` in `backend/app/services/brand_kit_store.py`: lock the requested owned brand before reading the kit, return an empty response with `not_started` when no row exists, and return saved answers/status/summary/timestamps when a row exists.
-- [ ] T019 [US1] Implement `BrandKitStore.upsert_kit` in `backend/app/services/brand_kit_store.py`: lock the owned brand row, trim and update the existing brand name, preserve omitted answer fields, clear explicitly null/empty fields, validate the resulting answer set, derive status server-side, derive summary only for a valid complete kit, and insert or update by the `brand_id` primary key.
-- [ ] T020 [US1] Complete the GET and PUT route handlers in `backend/app/routes/brand_kits.py`, including request logging with only event and request ID fields and response models matching `contracts/brand-kit.md`.
-- [ ] T021 [US1] Add the Brand Kit entry point to `frontend/app/(dashboard)/brands/[brandId]/page.tsx`: render a clear link to `/brands/{brandId}/kit`, disable or explain unavailability when the brand is in cleanup, and preserve the existing logo/provider/delete sections.
-- [ ] T022 [US1] Create `frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx` with authenticated loading, six ordered steps (Name, Tagline, Tone, Audience, Colors, Avoid words), Previous/Next controls, field labels, inline validation, and a visible current-step indicator.
-- [ ] T023 [US1] In `frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx`, submit the full form to `PUT /api/v1/brands/{brand_id}/kit` with the Supabase access token, display API validation errors, disable controls while saving, and display a complete summary after a successful complete response.
-- [ ] T024 [US1] Add the complete-kit browser journey to `frontend/tests/e2e/brand-kit.spec.ts`: record a start timestamp, create or select a test brand, fill all six steps with valid values and two colors, submit, assert the summary and complete status within 5 minutes, reload, and assert the values remain.
+- [X] T018 [US1] Implement `BrandKitStore.get_kit` in `backend/app/services/brand_kit_store.py`: lock the requested owned brand before reading the kit, return an empty response with `not_started` when no row exists, and return saved answers/status/summary/timestamps when a row exists.
+- [X] T019 [US1] Implement `BrandKitStore.upsert_kit` in `backend/app/services/brand_kit_store.py`: lock the owned brand row, trim and update the existing brand name, preserve omitted answer fields, clear explicitly null/empty fields, validate the resulting answer set, derive status server-side, derive summary only for a valid complete kit, and insert or update by the `brand_id` primary key.
+- [X] T020 [US1] Complete the GET and PUT route handlers in `backend/app/routes/brand_kits.py`, including request logging with only event and request ID fields and response models matching `contracts/brand-kit.md`.
+- [X] T021 [US1] Add the Brand Kit entry point to `frontend/app/(dashboard)/brands/[brandId]/page.tsx`: render a clear link to `/brands/{brandId}/kit`, disable or explain unavailability when the brand is in cleanup, and preserve the existing logo/provider/delete sections.
+- [X] T022 [US1] Create `frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx` with authenticated loading, six ordered steps (Name, Tagline, Tone, Audience, Colors, Avoid words), Previous/Next controls, field labels, inline validation, and a visible current-step indicator.
+- [X] T023 [US1] In `frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx`, submit the full form to `PUT /api/v1/brands/{brand_id}/kit` with the Supabase access token, display API validation errors, disable controls while saving, and display a complete summary after a successful complete response.
+- [X] T024 [US1] Add the complete-kit browser journey to `frontend/tests/e2e/brand-kit.spec.ts`: record a start timestamp, create or select a test brand, fill all six steps with valid values and two colors, submit, assert the summary and complete status within 5 minutes, reload, and assert the values remain.
 
 **US1 checkpoint**: Run these two shell commands separately: `backend/.venv/bin/python -m pytest -q backend/tests/contract/test_brand_kits.py backend/tests/unit/test_brand_kit_store.py` and `backend/.venv/bin/python -m pytest -q backend/tests/integration/test_brand_kits.py`. The complete-kit Playwright test must also pass.
 

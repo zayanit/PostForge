@@ -12,7 +12,7 @@ from ..services.brand_kit_store import (
     BrandKitStore,
     get_brand_kit_store,
 )
-from ..services.brand_store import BrandCleanupRequiredError
+from ..services.brand_store import BrandCleanupRequiredError, BrandNameTakenError
 
 
 router = APIRouter(prefix="/api/v1/brands", tags=["brand-kits"])
@@ -34,6 +34,16 @@ def _cleanup_required() -> HTTPException:
         detail={
             "code": "BRAND_CLEANUP_REQUIRED",
             "message": "Brand cleanup is required. Retry deletion.",
+        },
+    )
+
+
+def _name_taken() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "BRAND_NAME_TAKEN",
+            "message": "You already have a brand with this name.",
         },
     )
 
@@ -76,6 +86,8 @@ def put_brand_kit(
 ) -> BrandKit:
     try:
         kit = brand_kit_store.upsert_kit(current_user.user_id, brand_id, payload)
+    except BrandNameTakenError as exc:
+        raise _name_taken() from exc
     except (LookupError, BrandCleanupRequiredError) as exc:
         raise _map_access_error(exc) from exc
 

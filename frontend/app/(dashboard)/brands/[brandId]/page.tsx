@@ -18,6 +18,7 @@ type Brand = {
   name: string;
   logo_url: string | null;
   cleanup_state: "normal" | "cleanup_required";
+  kit_status?: "not_started" | "in_progress" | "complete";
   created_at: string;
 };
 
@@ -312,6 +313,12 @@ export default function BrandDetailPage() {
   }
 
   const cleanupRequired = brand.cleanup_state === "cleanup_required";
+  const kitStatus = brand.kit_status ?? "not_started";
+  const kitStatusLabel = {
+    not_started: "Not started",
+    in_progress: "In progress",
+    complete: "Complete",
+  }[kitStatus];
 
   return (
     <section className="mx-auto max-w-3xl space-y-8">
@@ -338,6 +345,32 @@ export default function BrandDetailPage() {
             )}
           </dd>
         </dl>
+      </div>
+
+      <div className="rounded-2xl border p-8">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Brand Kit</h2>
+            <p className="mt-1 text-sm text-gray-600">
+              Define the voice, audience, and visual direction for this brand.
+            </p>
+          </div>
+          <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700">
+            {kitStatusLabel}
+          </span>
+        </div>
+        {cleanupRequired || isDeleting ? (
+          <p className="mt-5 text-sm font-medium text-amber-800">
+            Brand Kit is unavailable while brand cleanup is in progress.
+          </p>
+        ) : (
+          <Link
+            className="mt-5 inline-block rounded-md border px-4 py-2 text-sm font-medium hover:border-gray-400"
+            href={`/brands/${brand.id}/kit`}
+          >
+            {kitStatus === "complete" ? "Review Brand Kit" : "Set up Brand Kit"}
+          </Link>
+        )}
       </div>
 
       <div className="rounded-2xl border p-8">

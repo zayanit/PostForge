@@ -1,23 +1,44 @@
 from __future__ import annotations
 
-from uuid import UUID
-
-import pytest
+from backend.app.services.brand_kit_store import derive_summary
 
 
-BRAND_ID = UUID("22222222-2222-2222-2222-222222222222")
-BRAND_NAME = "My Brand"
-COMPLETE_ANSWERS = {
-    "tagline": "Innovation for everyone",
-    "tone": "professional",
-    "audience": "Small business owners aged 25-45",
-    "colors": ["#FF5733", "#3498DB"],
-    "avoid_words": "cheap, discount",
-}
+def test_derive_summary_is_deterministic_and_includes_all_answers():
+    answers = {
+        "tagline": "  Innovation   for everyone ",
+        "tone": "professional",
+        "audience": " Small business owners aged 25-45 ",
+        "colors": ["#ff5733", "#3498db"],
+        "avoid_words": " cheap,   discount ",
+    }
+
+    assert derive_summary("  My   Brand ", answers) == "\n".join(
+        (
+            "Brand: My Brand",
+            "Tagline: Innovation for everyone",
+            "Tone: professional",
+            "Audience: Small business owners aged 25-45",
+            "Colors: #FF5733, #3498DB",
+            "Avoid words: cheap, discount",
+        )
+    )
 
 
-@pytest.mark.skip(reason="BrandKitStore behavior starts in Phase 2")
-def test_brand_kit_store_scaffold() -> None:
-    assert BRAND_ID
-    assert BRAND_NAME
-    assert COMPLETE_ANSWERS
+def test_derive_summary_uses_none_specified_for_omitted_optional_answers():
+    assert derive_summary(
+        "My Brand",
+        {
+            "tone": "professional",
+            "audience": "Small business owners aged 25-45",
+            "colors": ["#FF5733"],
+        },
+    ) == "\n".join(
+        (
+            "Brand: My Brand",
+            "Tagline: None specified",
+            "Tone: professional",
+            "Audience: Small business owners aged 25-45",
+            "Colors: #FF5733",
+            "Avoid words: None specified",
+        )
+    )
