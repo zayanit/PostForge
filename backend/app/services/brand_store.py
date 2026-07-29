@@ -57,7 +57,14 @@ class BrandStore:
             "cleanup_required": "cleanup_required",
         }[row["deletion_state"]]
         return Brand.model_validate(
-            {"logo_url": logo_url, "cleanup_state": cleanup_state, **row}
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "logo_url": logo_url,
+                "cleanup_state": cleanup_state,
+                "kit_status": row.get("kit_status", "not_started"),
+                "created_at": row["created_at"],
+            }
         )
 
     @staticmethod
@@ -69,10 +76,12 @@ class BrandStore:
         row = connection.execute(
             text(
                 """
-                SELECT id, name, logo_path, deletion_state, created_at
-                FROM brands
-                WHERE id = :brand_id AND owner_user_id = :owner_user_id
-                FOR UPDATE
+                SELECT b.id, b.name, b.logo_path, b.deletion_state, b.created_at,
+                       COALESCE(k.status::TEXT, 'not_started') AS kit_status
+                FROM brands AS b
+                LEFT JOIN brand_kits AS k ON k.brand_id = b.id
+                WHERE b.id = :brand_id AND b.owner_user_id = :owner_user_id
+                FOR UPDATE OF b
                 """
             ),
             {"brand_id": brand_id, "owner_user_id": user_id},
@@ -155,10 +164,12 @@ class BrandStore:
             rows = connection.execute(
                 text(
                     """
-                    SELECT id, name, logo_path, deletion_state, created_at
-                    FROM brands
-                    WHERE owner_user_id = :owner_user_id
-                    ORDER BY created_at DESC, id DESC
+                    SELECT b.id, b.name, b.logo_path, b.deletion_state, b.created_at,
+                           COALESCE(k.status::TEXT, 'not_started') AS kit_status
+                    FROM brands AS b
+                    LEFT JOIN brand_kits AS k ON k.brand_id = b.id
+                    WHERE b.owner_user_id = :owner_user_id
+                    ORDER BY b.created_at DESC, b.id DESC
                     """
                 ),
                 {"owner_user_id": user_id},
@@ -171,9 +182,11 @@ class BrandStore:
             row = connection.execute(
                 text(
                     """
-                    SELECT id, name, logo_path, deletion_state, created_at
-                    FROM brands
-                    WHERE id = :brand_id AND owner_user_id = :owner_user_id
+                    SELECT b.id, b.name, b.logo_path, b.deletion_state, b.created_at,
+                           COALESCE(k.status::TEXT, 'not_started') AS kit_status
+                    FROM brands AS b
+                    LEFT JOIN brand_kits AS k ON k.brand_id = b.id
+                    WHERE b.id = :brand_id AND b.owner_user_id = :owner_user_id
                     """
                 ),
                 {"brand_id": brand_id, "owner_user_id": user_id},
@@ -380,6 +393,7 @@ class BrandStore:
             ).mappings().one_or_none()
             if row is None:
                 raise BrandAssetOperationStaleError
+            row = {**row, "kit_status": brand["kit_status"]}
         return self._to_brand(row)
 
     def complete_asset_operation(

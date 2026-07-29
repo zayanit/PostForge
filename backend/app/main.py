@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import assert_database_role_privileges, load_settings
 from .routes.auth import router as auth_router
+from .routes.brand_kits import router as brand_kits_router
 from .routes.brands import router as brands_router
 from .routes.health import router as health_router
 from .routes.me import router as me_router
@@ -150,6 +151,7 @@ async def root() -> dict[str, str]:
 
 
 app.include_router(auth_router)
+app.include_router(brand_kits_router)
 app.include_router(brands_router)
 app.include_router(health_router)
 app.include_router(me_router)
