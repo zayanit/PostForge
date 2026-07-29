@@ -46,24 +46,29 @@ export default function SignupPage() {
     }
 
     setSubmitting(true);
-    const { data, error } = await supabase.auth.signUp({
-      email: values.email.trim(),
-      password: values.password,
-    });
-    setSubmitting(false);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: values.email.trim(),
+        password: values.password,
+      });
 
-    if (error) {
-      setStatus(error.message);
-      return;
+      if (error) {
+        setStatus(error.message);
+        return;
+      }
+
+      // Email confirmation is disabled (FR-005), so signUp() already establishes
+      // a live session — don't tell an already-authenticated user to "sign in".
+      setStatus(
+        data.session
+          ? "Account created. You're signed in."
+          : "Account created. You can now sign in."
+      );
+    } catch {
+      setStatus("Unable to create your account. Please try again.");
+    } finally {
+      setSubmitting(false);
     }
-
-    // Email confirmation is disabled (FR-005), so signUp() already establishes
-    // a live session — don't tell an already-authenticated user to "sign in".
-    setStatus(
-      data.session
-        ? "Account created. You're signed in."
-        : "Account created. You can now sign in."
-    );
   }
 
   return (

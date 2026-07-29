@@ -1,7 +1,7 @@
 # Specification Quality Checklist: Accessible Sign-up Flow
 
 **Purpose**: Validate specification completeness before planning
-**Created**: 2026-07-29
+**Created**: 2026-07-28
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality

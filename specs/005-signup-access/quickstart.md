@@ -9,9 +9,10 @@
 7. Run automated checks:
 
    ```bash
-   cd frontend && npm run lint
-   cd frontend && npx playwright test tests/e2e/signup-flow.spec.ts
-   cd frontend && npm run build
+   cd frontend
+   npm run lint
+   npx playwright test tests/e2e/signup-flow.spec.ts
+   npm run build
    ```
 
-Expected verification: the signup-flow suite reports 2 passed, frontend lint passes, and the production build completes successfully.
+Verification results: `npm run lint` passed; `npx playwright test tests/e2e/signup-flow.spec.ts` failed because `127.0.0.1:3000` was unavailable; `npm run build` passed.

@@ -28,7 +28,7 @@
 
 - [x] T007 Run frontend lint and the signup Playwright test from `frontend/`
 - [x] T008 Run the frontend production build from `frontend/`
-- [x] T009 Update this task file and the feature quickstart with final verification results
+- [x] T009 Document actual verification results, including the Playwright server-unavailable failure, in this task file and the feature quickstart
 
 ## Dependencies
 
