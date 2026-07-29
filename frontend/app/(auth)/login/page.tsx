@@ -92,6 +92,9 @@ export default function LoginPage() {
           <Link className="text-gray-700 underline underline-offset-4" href="/forgot-password">
             Forgot password?
           </Link>
+          <Link className="text-gray-700 underline underline-offset-4" href="/signup">
+            Sign up
+          </Link>
         </div>
 
         <button

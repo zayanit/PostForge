@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import Link from "next/link";
 
 import { supabase } from "@/lib/supabase/client";
 
@@ -45,24 +46,29 @@ export default function SignupPage() {
     }
 
     setSubmitting(true);
-    const { data, error } = await supabase.auth.signUp({
-      email: values.email.trim(),
-      password: values.password,
-    });
-    setSubmitting(false);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: values.email.trim(),
+        password: values.password,
+      });
 
-    if (error) {
-      setStatus(error.message);
-      return;
+      if (error) {
+        setStatus(error.message);
+        return;
+      }
+
+      // Email confirmation is disabled (FR-005), so signUp() already establishes
+      // a live session — don't tell an already-authenticated user to "sign in".
+      setStatus(
+        data.session
+          ? "Account created. You're signed in."
+          : "Account created. You can now sign in."
+      );
+    } catch {
+      setStatus("Unable to create your account. Please try again.");
+    } finally {
+      setSubmitting(false);
     }
-
-    // Email confirmation is disabled (FR-005), so signUp() already establishes
-    // a live session — don't tell an already-authenticated user to "sign in".
-    setStatus(
-      data.session
-        ? "Account created. You're signed in."
-        : "Account created. You can now sign in."
-    );
   }
 
   return (
@@ -72,6 +78,13 @@ export default function SignupPage() {
           <h1 className="text-2xl font-semibold">Create your account</h1>
           <p className="mt-1 text-sm text-gray-600">Use your email and a password with at least 8 characters.</p>
         </div>
+
+        <p className="text-sm text-gray-600">
+          Already have an account?{" "}
+          <Link className="text-gray-700 underline underline-offset-4" href="/login">
+            Sign in
+          </Link>
+        </p>
 
         <label className="block space-y-2">
           <span className="text-sm font-medium">Email</span>
