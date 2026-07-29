@@ -29,6 +29,29 @@ Brand API responses gain a derived `kit_status` field. It is `not_started` when 
 3. A row with a valid name and all required answers, including 1–3 colors → `complete`, summary populated, `completed_at` set.
 4. Editing a complete kit so a required field becomes invalid → `in_progress`, summary cleared, `completed_at` cleared.
 
+## Deterministic summary
+
+Only a `complete` kit receives a summary; incomplete kits persist and expose `summary: null`. The server generates the exact same string for the persisted `summary` and API response using this field order and template, with a single line-feed (`\n`) between lines and no trailing newline:
+
+```text
+Brand: {brand_name}
+Tagline: {tagline}
+Tone: {tone}
+Audience: {audience}
+Colors: {colors}
+Avoid words: {avoid_words}
+```
+
+Before substitution, trim leading and trailing whitespace from every text value, collapse internal whitespace runs to one space, render `tone` in its enum spelling, normalize each color to uppercase canonical `#RRGGBB` while preserving array order, and join colors with `, `. Empty or omitted optional `tagline` and `avoid_words` values render as `None specified`; required values must already be valid. No client-supplied summary is accepted.
+
+Examples:
+
+- Complete without optional values → `Brand: Acme\nTagline: None specified\nTone: professional\nAudience: Small business owners\nColors: #FF5733, #3498DB\nAvoid words: None specified`.
+- Incomplete with one saved answer → `status: in_progress`, `summary: null`.
+- Complete with avoid words `cheap, discount` → the final line is `Avoid words: cheap, discount`; every other line remains in the same order and format.
+
+These rules make the persisted and API-visible summary deterministic for the same normalized answers.
+
 The existing brand name is updated in the same transaction as the kit upsert. Each write locks the owned brand row; overlapping successful writes use last-successful-save-wins behavior.
 
 ## Security and deletion
