@@ -31,7 +31,7 @@
 From the repository root:
 
 ```bash
-backend/.venv/bin/python -m pytest -q backend/tests/contract/test_brand_kits.py
+backend/.venv/bin/python -m pytest -q backend/tests/contract/test_brand_kits.py backend/tests/unit/test_brand_kit_store.py
 backend/.venv/bin/python -m pytest -q backend/tests/integration/test_brand_kits.py backend/tests/integration/test_brand_kit_rls.py
 cd frontend
 npm run lint

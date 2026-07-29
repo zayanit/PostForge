@@ -10,7 +10,7 @@ One row belongs to exactly one `brands` row. `brand_id` is both the primary key 
 | `tagline` | text | Optional; maximum 160 characters |
 | `tone` | `tone_t` | Optional while partial; required for `complete`; values: `formal`, `casual`, `playful`, `professional`, `friendly` |
 | `audience` | text | Optional while partial; when supplied, 2–500 non-whitespace characters; required for `complete` |
-| `colors` | text[] | Default empty array for partial kits; 1–3 valid hexadecimal colors required for `complete` |
+| `colors` | text[] | Default empty array for partial kits; 1–3 colors matching the canonical six-digit hexadecimal format `#RRGGBB` (leading `#` required; hex digits are case-insensitive) required for `complete` |
 | `avoid_words` | text | Optional |
 | `summary` | text | Null or partial while incomplete; deterministic derived text when complete |
 | `status` | `kit_status_t` | `not_started`, `in_progress`, or `complete`; derived from saved answers |

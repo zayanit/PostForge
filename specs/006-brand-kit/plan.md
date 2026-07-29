@@ -6,7 +6,7 @@
 
 ## Summary
 
-Implement the six-step Brand Kit interview across the FastAPI API, Supabase schema, and Next.js dashboard. Add one owner-scoped `brand_kits` record per brand, derive status and summary server-side, expose authenticated GET/PUT endpoints, and add a wizard route with auto-save, explicit save, resume, completion summary, and navigation status. Existing brand ownership, error formatting, and hard-delete behavior will be reused.
+Implement the six-step Brand Kit interview across the FastAPI API, Supabase schema, and Next.js dashboard. Each brand has at most one owner-scoped `brand_kits` record; a brand with zero persisted answers has no kit row and is reported as `not_started`. Derive status and summary server-side, expose authenticated GET/PUT endpoints, and add a wizard route with auto-save, explicit save, resume, completion summary, and navigation status. Existing brand ownership, error formatting, and hard-delete behavior will be reused.
 
 ## Technical Context
 
@@ -14,7 +14,7 @@ Implement the six-step Brand Kit interview across the FastAPI API, Supabase sche
 
 **Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy text queries, Supabase PostgreSQL/RLS, Supabase SSR client, Playwright
 
-**Storage**: Supabase PostgreSQL `brand_kits` table with one row per brand; `brands` queries derive `kit_status` with a left join so zero-answer kits require no row
+**Storage**: Supabase PostgreSQL `brand_kits` table with at most one row per brand; `brands` queries derive `kit_status` with a left join, defaulting a missing zero-answer row to `not_started`
 
 **Testing**: Backend contract and unit tests, real Supabase integration/RLS tests, frontend Playwright E2E, ESLint, TypeScript/Next.js production build
 
@@ -61,9 +61,11 @@ backend/app/main.py                           # router registration
 backend/app/models/brand.py                    # kit_status in brand responses
 backend/app/services/brand_store.py            # derived status in brand queries
 backend/tests/contract/test_brand_kits.py
+backend/tests/unit/test_brand_kit_store.py
 backend/tests/integration/test_brand_kit_rls.py
 backend/tests/integration/test_brand_kits.py
 
+frontend/app/(dashboard)/brands/page.tsx
 frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx
 frontend/app/(dashboard)/brands/[brandId]/page.tsx
 frontend/app/(dashboard)/layout.tsx

@@ -32,4 +32,5 @@
 ## Notes
 
 - The Phase 5 Brand Kit checkpoint requires both zero-answer and complete-kit verification; both are explicitly covered.
+- FR-016 coverage is explicit in User Story 3, acceptance scenario 4, and tasks T038–T039.
 - Provider integrations and image-generation lifecycle checks are not applicable until later phases.

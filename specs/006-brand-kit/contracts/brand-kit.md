@@ -43,7 +43,7 @@ Upserts the existing brand name and kit answers. The client may send partial ans
 }
 ```
 
-The response uses the same shape as GET. A partial save returns `in_progress` with `summary` and `completed_at` set to null; a valid complete save returns `complete` with summary and `completed_at`.
+The response uses the same shape as GET. A request that persists zero answers, including an explicit “save no answers” request, returns `not_started` with `summary` and `completed_at` set to null. `in_progress` begins only after at least one answer has been saved. A valid complete save returns `complete` with summary and `completed_at`.
 
 ## Validation
 
@@ -51,7 +51,7 @@ The response uses the same shape as GET. A partial save returns `in_progress` wi
 - `tagline`: optional, at most 160 characters.
 - `tone`: one of `formal`, `casual`, `playful`, `professional`, `friendly`.
 - `audience`: optional while partial; 2–500 non-whitespace characters when supplied and required for completion.
-- `colors`: zero values while partial, otherwise 1–3 valid hexadecimal colors for completion.
+- `colors`: zero values while partial, otherwise 1–3 colors matching the canonical six-digit hexadecimal format `#RRGGBB` (leading `#` required; hex digits are case-insensitive) for completion.
 - `avoid_words`: optional.
 
 ## Errors

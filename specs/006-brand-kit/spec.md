@@ -15,7 +15,7 @@
 - Q: What does the Name step do? → A: It edits the existing brand name; it does not create a separate kit name or a second brand.
 - Q: How should unauthorized access to another user’s kit respond? → A: Return a generic not-found response with no kit data, without revealing whether the brand exists.
 - Q: How should simultaneous saves from multiple tabs or sessions be handled? → A: The last successful save wins.
-- Q: How many colors are required for a complete kit? → A: Require 1–3 valid hexadecimal colors.
+- Q: How many colors are required for a complete kit? → A: Require 1–3 colors matching the canonical six-digit hexadecimal format `#RRGGBB` (the leading `#` is required; hex digits are case-insensitive).
 - Q: When should wizard progress be saved? → A: Auto-save after each completed step and support an explicit save action.
 
 ## User Scenarios & Testing
@@ -62,13 +62,14 @@ A brand owner can manage only kits belonging to their own brands, while other us
 1. **Given** an authenticated owner requests their own brand kit, **When** the request is processed, **Then** the kit is returned.
 2. **Given** an authenticated user requests another user’s brand kit by identifier, **When** the request is processed, **Then** no kit data is disclosed and a generic not-found response is returned.
 3. **Given** a visitor has no valid session, **When** they request or update a brand kit, **Then** the request is rejected without exposing kit data.
+4. **Given** an owner’s kit is `not_started`, `in_progress`, or `complete`, **When** they view brand navigation, **Then** the navigation displays the matching kit status.
 
 ### Edge Cases
 
 - A kit is requested before any answers have been saved.
 - A required answer is blank, whitespace-only, or outside its allowed length.
 - A tone value is not one of the five supported choices.
-- More than three colors are submitted, or a color is not a valid hexadecimal value.
+- More than three colors are submitted, or a color does not match the canonical six-digit hexadecimal format `#RRGGBB` (leading `#` required; hex digits case-insensitive).
 - A user tries to mark a kit complete while a required answer is missing.
 - A save is repeated with the same answers and must not create duplicate kits.
 - Two tabs or sessions save different answers for the same brand at nearly the same time.
@@ -84,8 +85,8 @@ A brand owner can manage only kits belonging to their own brands, while other us
 - **FR-002**: The Name step MUST edit the existing brand name, and the interview MUST NOT create a separate kit name or a second brand.
 - **FR-003**: The tagline MUST be optional and limited to 160 characters when supplied.
 - **FR-004**: Tone MUST be required and limited to `formal`, `casual`, `playful`, `professional`, or `friendly`.
-- **FR-005**: Audience MUST be required and contain between 2 and 500 non-whitespace characters.
-- **FR-006**: Colors MUST contain at least one and no more than three values, and each value MUST be a valid hexadecimal color.
+- **FR-005**: For a kit to reach the `complete` lifecycle state, audience MUST be supplied and contain between 2 and 500 non-whitespace characters; partial saves MAY omit or leave audience empty.
+- **FR-006**: For a kit to reach the `complete` lifecycle state, colors MUST contain at least one and no more than three values, and each value MUST match the canonical six-digit hexadecimal format `#RRGGBB` (leading `#` required; hex digits are case-insensitive); partial saves MAY omit or leave colors empty.
 - **FR-007**: Avoid words MUST be optional.
 - **FR-008**: The system MUST allow a kit to be read when it has no saved answers and MUST return status `not_started` in that state.
 - **FR-009**: The system MUST save partial answers and return status `in_progress` until all required fields are valid.
