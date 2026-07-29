@@ -13,9 +13,9 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm the working tree is on branch `006-brand-kit` and read `specs/006-brand-kit/contracts/brand-kit.md` before editing implementation files.
-- [ ] T002 [P] Create the backend test files `backend/tests/contract/test_brand_kits.py`, `backend/tests/unit/test_brand_kit_store.py`, `backend/tests/integration/test_brand_kits.py`, and `backend/tests/integration/test_brand_kit_rls.py` with imports and shared constants matching the existing brand/provider test style; do not implement production behavior yet.
-- [ ] T003 [P] Create the frontend E2E file `frontend/tests/e2e/brand-kit.spec.ts` with the local app assumptions from `specs/006-brand-kit/quickstart.md`; keep test cases focused on the six-step wizard, partial resume, complete summary, and unauthorized access.
+- [X] T001 Confirm the working tree is on branch `006-brand-kit` and read `specs/006-brand-kit/contracts/brand-kit.md` before editing implementation files.
+- [X] T002 [P] Create the backend test files `backend/tests/contract/test_brand_kits.py`, `backend/tests/unit/test_brand_kit_store.py`, `backend/tests/integration/test_brand_kits.py`, and `backend/tests/integration/test_brand_kit_rls.py` with imports and shared constants matching the existing brand/provider test style; do not implement production behavior yet.
+- [X] T003 [P] Create the frontend E2E file `frontend/tests/e2e/brand-kit.spec.ts` with the local app assumptions from `specs/006-brand-kit/quickstart.md`; keep test cases focused on the six-step wizard, partial resume, complete summary, and unauthorized access.
 
 ## Phase 2: Foundational backend and database work
 
