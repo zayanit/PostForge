@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { getPublicEnv } from "@/lib/runtime-env";
 import { supabase } from "@/lib/supabase/client";
@@ -98,11 +98,14 @@ export default function BrandKitPage() {
   const [step, setStep] = useState(0);
   const [status, setStatus] = useState<KitStatus>("not_started");
   const [summary, setSummary] = useState<string | null>(null);
+  const [showSummary, setShowSummary] = useState(false);
   const [brandName, setBrandName] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<"idle" | "saved">("idle");
+  const hasLocalEdits = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -129,15 +132,31 @@ export default function BrandKitPage() {
         if (active) {
           setStatus(kit.status);
           setBrandName(kit.brand_name);
-          setValues({
-            name: kit.brand_name,
-            tagline: kit.answers.tagline ?? "",
-            tone: kit.answers.tone ?? "",
-            audience: kit.answers.audience ?? "",
-            colors: kit.answers.colors.join(", "),
-            avoidWords: kit.answers.avoid_words ?? "",
-          });
-          setSummary(kit.summary);
+          if (!hasLocalEdits.current) {
+            setValues({
+              name: kit.brand_name,
+              tagline: kit.answers.tagline ?? "",
+              tone: kit.answers.tone ?? "",
+              audience: kit.answers.audience ?? "",
+              colors: kit.answers.colors.join(", "),
+              avoidWords: kit.answers.avoid_words ?? "",
+            });
+            setSummary(kit.summary);
+            setShowSummary(kit.status === "complete" && kit.summary !== null);
+            if (kit.status === "in_progress") {
+              const firstIncomplete = [0, 2, 3, 4].find((index) => {
+                return validateStep(index, {
+                  name: kit.brand_name,
+                  tagline: kit.answers.tagline ?? "",
+                  tone: kit.answers.tone ?? "",
+                  audience: kit.answers.audience ?? "",
+                  colors: kit.answers.colors.join(", "),
+                  avoidWords: kit.answers.avoid_words ?? "",
+                });
+              });
+              setStep(firstIncomplete ?? 0);
+            }
+          }
         }
       } catch (loadError) {
         if (active) {
@@ -155,19 +174,22 @@ export default function BrandKitPage() {
   }, [apiBase, brandId, router]);
 
   function updateValue(field: keyof FormValues, value: string) {
+    hasLocalEdits.current = true;
     setValues((current) => ({ ...current, [field]: value }));
     setValidationError(null);
     setError(null);
+    setSaveState("idle");
   }
 
-  function nextStep() {
+  async function nextStep() {
     const message = validateStep(step, values);
     if (message) {
       setValidationError(message);
       return;
     }
     setValidationError(null);
-    setStep((current) => Math.min(current + 1, STEPS.length - 1));
+    const saved = await saveKit(false);
+    if (saved) setStep((current) => Math.min(current + 1, STEPS.length - 1));
   }
 
   function previousStep() {
@@ -175,26 +197,35 @@ export default function BrandKitPage() {
     setStep((current) => Math.max(current - 1, 0));
   }
 
-  async function saveKit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    for (let index = 0; index < STEPS.length; index += 1) {
-      const message = validateStep(index, values);
+  async function saveKit(complete: boolean, event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    if (complete) {
+      for (let index = 0; index < STEPS.length; index += 1) {
+        const message = validateStep(index, values);
+        if (message) {
+          setStep(index);
+          setValidationError(message);
+          return false;
+        }
+      }
+    } else {
+      const message = validateStep(step, values);
       if (message) {
-        setStep(index);
         setValidationError(message);
-        return;
+        return false;
       }
     }
 
     setValidationError(null);
     setError(null);
     setIsSaving(true);
+    setSaveState("idle");
     try {
       const { data } = await supabase.auth.getSession();
       const session = data.session;
-      if (!session) {
-        router.push("/login");
-        return;
+        if (!session) {
+          router.push("/login");
+          return false;
       }
 
       const response = await fetch(
@@ -220,15 +251,21 @@ export default function BrandKitPage() {
       const body = (await response.json().catch(() => null)) as KitResponse | ApiError | null;
       if (!response.ok) {
         setError(apiErrorMessage(body as ApiError | null, "Unable to save the Brand Kit."));
-        return;
+        return false;
       }
 
       const kit = body as KitResponse;
       setStatus(kit.status);
       setBrandName(kit.brand_name);
       setSummary(kit.summary);
+      setShowSummary(complete && kit.status === "complete" && kit.summary !== null);
+      setSaveState("saved");
+      hasLocalEdits.current = false;
+      window.dispatchEvent(new Event("postforge:brands-changed"));
+      return true;
     } catch {
       setError("Unable to save the Brand Kit. Try again.");
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -242,7 +279,7 @@ export default function BrandKitPage() {
     return <p className="mx-auto max-w-3xl text-sm text-red-600">{error}</p>;
   }
 
-  if (status === "complete" && summary) {
+  if (showSummary && summary) {
     return (
       <section className="mx-auto max-w-3xl space-y-8">
         <Link className="text-sm text-gray-600 hover:text-black" href={`/brands/${brandId}`}>
@@ -264,7 +301,10 @@ export default function BrandKitPage() {
           <button
             className="mt-6 rounded-md border px-4 py-2 text-sm font-medium hover:border-gray-400"
             type="button"
-            onClick={() => setSummary(null)}
+            onClick={() => {
+              setSummary(null);
+              setShowSummary(false);
+            }}
           >
             Edit Brand Kit
           </button>
@@ -300,7 +340,7 @@ export default function BrandKitPage() {
         ))}
       </div>
 
-      <form className="rounded-2xl border p-8" onSubmit={saveKit} noValidate>
+      <form className="rounded-2xl border p-8" onSubmit={(event) => void saveKit(true, event)} noValidate>
         <h2 className="text-2xl font-semibold">{STEPS[step]}</h2>
         <div className="mt-6">
           {step === 0 ? (
@@ -360,7 +400,7 @@ export default function BrandKitPage() {
               disabled={isSaving}
               onClick={(event) => {
                 event.preventDefault();
-                nextStep();
+                void nextStep();
               }}
             >
               Next
@@ -368,7 +408,18 @@ export default function BrandKitPage() {
           ) : (
             <button className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50" type="submit" disabled={isSaving}>{isSaving ? "Saving..." : "Complete kit"}</button>
           )}
+          <button
+            className="rounded-md border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            type="button"
+            disabled={isSaving}
+            onClick={() => void saveKit(false)}
+          >
+            {isSaving ? "Saving..." : "Save progress"}
+          </button>
         </div>
+        <p className="mt-4 text-sm text-gray-600" role="status">
+          {isSaving ? "Saving..." : saveState === "saved" ? "Saved" : status === "in_progress" ? "In progress" : "Not started"}
+        </p>
       </form>
     </section>
   );

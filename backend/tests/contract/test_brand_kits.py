@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.auth import CurrentUser, get_current_user
@@ -66,10 +67,26 @@ class FakeBrandKitStore:
         self, user_id: str, brand_id: UUID, payload: BrandKitUpsert
     ) -> BrandKit:
         self.saved_payloads.append(payload)
+        current = self.kit.answers if self.kit else BrandKitUpsert.model_validate(
+            {"name": payload.name}
+        ).answers
+        answers = current.model_copy(
+            update=payload.answers.model_dump(exclude_unset=True)
+        )
+        is_complete = (
+            answers.tone is not None
+            and answers.audience is not None
+            and bool(answers.colors)
+        )
+        kit_status = "complete" if is_complete else (
+            "in_progress"
+            if any((answers.tagline, answers.tone, answers.audience, answers.colors, answers.avoid_words))
+            else "not_started"
+        )
         self.kit = _kit(
-            answers=payload.answers,
-            status="complete",
-            summary=derive_summary(payload.name, payload.answers),
+            answers=answers,
+            status=kit_status,
+            summary=derive_summary(payload.name, answers) if is_complete else None,
         )
         return self.kit
 
@@ -198,5 +215,150 @@ def test_put_maps_duplicate_brand_name_to_conflict():
         assert response.status_code == 409
         assert response.json()["error"]["code"] == "BRAND_NAME_TAKEN"
         assert response.json()["error"]["request_id"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_put_zero_answers_returns_not_started_without_derived_fields():
+    store = FakeBrandKitStore()
+    try:
+        with _client(store) as client:
+            response = client.put(
+                f"/api/v1/brands/{BRAND_ID}/kit",
+                json={"name": "My Brand", "answers": {}},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "not_started"
+        assert response.json()["summary"] is None
+        assert response.json()["completed_at"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_answer_save_transitions_to_in_progress_and_preserves_omitted_values():
+    store = FakeBrandKitStore()
+    try:
+        with _client(store) as client:
+            first = client.put(
+                f"/api/v1/brands/{BRAND_ID}/kit",
+                json={"name": "My Brand", "answers": {"tagline": "Hello"}},
+            )
+            second = client.put(
+                f"/api/v1/brands/{BRAND_ID}/kit",
+                json={"name": "My Brand", "answers": {"tone": "friendly"}},
+            )
+
+        assert first.json()["status"] == "in_progress"
+        assert second.json()["answers"]["tagline"] == "Hello"
+        assert second.json()["answers"]["tone"] == "friendly"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_explicit_empty_values_clear_answers_and_derived_fields():
+    store = FakeBrandKitStore()
+    try:
+        with _client(store) as client:
+            complete = client.put(
+                f"/api/v1/brands/{BRAND_ID}/kit",
+                json={"name": "My Brand", "answers": COMPLETE_ANSWERS},
+            )
+            cleared = client.put(
+                f"/api/v1/brands/{BRAND_ID}/kit",
+                json={
+                    "name": "My Brand",
+                    "answers": {"tone": None, "colors": []},
+                },
+            )
+
+        assert complete.json()["status"] == "complete"
+        assert cleared.json()["status"] == "in_progress"
+        assert cleared.json()["answers"]["tone"] is None
+        assert cleared.json()["answers"]["colors"] == []
+        assert cleared.json()["summary"] is None
+        assert cleared.json()["completed_at"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_invalid_completion_is_rejected_without_replacing_saved_response():
+    store = FakeBrandKitStore()
+    try:
+        with _client(store) as client:
+            saved = client.put(
+                f"/api/v1/brands/{BRAND_ID}/kit",
+                json={"name": "My Brand", "answers": {"tagline": "Keep me"}},
+            )
+            invalid = client.put(
+                f"/api/v1/brands/{BRAND_ID}/kit",
+                json={
+                    "name": "My Brand",
+                    "answers": {"colors": ["not-a-color"]},
+                },
+            )
+
+        assert saved.status_code == 200
+        assert invalid.status_code == 400
+        assert store.saved_payloads[-1].answers.tagline == "Keep me"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_repeated_puts_keep_a_single_logical_kit_payload():
+    store = FakeBrandKitStore()
+    try:
+        with _client(store) as client:
+            for _ in range(2):
+                response = client.put(
+                    f"/api/v1/brands/{BRAND_ID}/kit",
+                    json={"name": "My Brand", "answers": {"tagline": "Hello"}},
+                )
+                assert response.status_code == 200
+
+        assert len(store.saved_payloads) == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("authorization", [None, "Basic malformed", "Bearer "])
+def test_kit_requires_a_valid_authorization_header(authorization: str | None):
+    headers = {} if authorization is None else {"Authorization": authorization}
+    try:
+        with TestClient(app) as client:
+            response = client.get(f"/api/v1/brands/{BRAND_ID}/kit", headers=headers)
+
+        assert response.status_code == 401
+        assert response.json()["error"]["code"] == "UNAUTHORIZED"
+        assert response.json()["error"]["message"] == "Sign in required."
+        assert set(response.json()["error"]) == {"code", "message", "request_id"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_kit_store_errors_are_opaque_for_non_owner_and_missing_brands():
+    class UnauthorizedStore(FakeBrandKitStore):
+        def get_kit(self, user_id: str, brand_id: UUID) -> BrandKit:
+            raise LookupError("Brand not found.")
+
+        def upsert_kit(
+            self, user_id: str, brand_id: UUID, payload: BrandKitUpsert
+        ) -> BrandKit:
+            raise LookupError("Brand not found.")
+
+    try:
+        with _client(UnauthorizedStore()) as client:
+            get_response = client.get(f"/api/v1/brands/{BRAND_ID}/kit")
+            put_response = client.put(
+                f"/api/v1/brands/{BRAND_ID}/kit",
+                json={"name": "Private Brand", "answers": {}},
+            )
+
+        for response in (get_response, put_response):
+            assert response.status_code == 404
+            error = response.json()["error"]
+            assert error["code"] == "BRAND_NOT_FOUND"
+            assert error["message"] == "Brand not found."
+            assert "Private Brand" not in response.text
     finally:
         app.dependency_overrides.clear()

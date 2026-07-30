@@ -136,6 +136,14 @@ class BrandKitStore:
             )
         )
 
+    @classmethod
+    def _status_for_answers(cls, answers: BrandKitAnswers) -> KitStatus:
+        if answers.tone is not None and answers.audience is not None and answers.colors:
+            return KitStatus.COMPLETE
+        if cls._has_saved_answer(answers):
+            return KitStatus.IN_PROGRESS
+        return KitStatus.NOT_STARTED
+
     def get_kit(self, user_id: str, brand_id: UUID) -> BrandKit:
         with self.engine.begin() as connection:
             brand = BrandStore.lock_owned_brand(connection, user_id, brand_id)
@@ -157,15 +165,8 @@ class BrandKitStore:
                 BrandStore.require_normal_brand(brand)
                 existing = self._kit_row(connection, brand_id)
                 answers = self._merged_answers(existing, payload)
-                complete = (
-                    answers.tone is not None
-                    and answers.audience is not None
-                    and bool(answers.colors)
-                )
-                status = KitStatus.COMPLETE if complete else (
-                    KitStatus.IN_PROGRESS if self._has_saved_answer(answers)
-                    else KitStatus.NOT_STARTED
-                )
+                status = self._status_for_answers(answers)
+                complete = status is KitStatus.COMPLETE
                 summary = derive_summary(payload.name, answers) if complete else None
 
                 connection.execute(

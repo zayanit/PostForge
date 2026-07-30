@@ -10,7 +10,14 @@ import { supabase } from "@/lib/supabase/client";
 type Brand = {
   id: string;
   name: string;
+  kit_status: "not_started" | "in_progress" | "complete";
 };
+
+const KIT_STATUS_LABELS = {
+  not_started: "Not started",
+  in_progress: "In progress",
+  complete: "Complete",
+} as const;
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -117,7 +124,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               </option>
               {brands.map((brand) => (
                 <option value={brand.id} key={brand.id}>
-                  {brand.name}
+                  {brand.name} ({KIT_STATUS_LABELS[brand.kit_status]})
                 </option>
               ))}
             </select>

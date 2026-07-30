@@ -67,17 +67,17 @@
 
 ### Tests first
 
-- [ ] T025 [P] [US2] Add contract tests in `backend/tests/contract/test_brand_kits.py` for zero-answer PUT returning `not_started` with null summary/completed_at, at-least-one-answer PUT returning `in_progress`, omitted fields preserving stored values, explicit null/empty fields clearing values, empty colors being accepted while partial, invalid completion being rejected, and repeated PUT not creating a duplicate row.
-- [ ] T026 [P] [US2] Add unit tests in `backend/tests/unit/test_brand_kit_store.py` for `not_started`/`in_progress`/`complete` transitions, clearing summary/completed_at when a complete kit becomes incomplete, and last-successful-save-wins transaction behavior.
-- [ ] T027 [P] [US2] Add integration tests in `backend/tests/integration/test_brand_kits.py` for partial save/reload, omitted optional answers producing a complete summary with explicit unspecified values, invalid save preserving the prior valid row, and overlapping saves retaining the later committed values.
+- [X] T025 [P] [US2] Add contract tests in `backend/tests/contract/test_brand_kits.py` for zero-answer PUT returning `not_started` with null summary/completed_at, at-least-one-answer PUT returning `in_progress`, omitted fields preserving stored values, explicit null/empty fields clearing values, empty colors being accepted while partial, invalid completion being rejected, and repeated PUT not creating a duplicate row.
+- [X] T026 [P] [US2] Add unit tests in `backend/tests/unit/test_brand_kit_store.py` for `not_started`/`in_progress`/`complete` transitions, clearing summary/completed_at when a complete kit becomes incomplete, and last-successful-save-wins transaction behavior.
+- [X] T027 [P] [US2] Add integration tests in `backend/tests/integration/test_brand_kits.py` for partial save/reload, omitted optional answers producing a complete summary with explicit unspecified values, invalid save preserving the prior valid row, and overlapping saves retaining the later committed values.
 
 ### Implementation
 
-- [ ] T028 [US2] Extend `BrandKitStore.upsert_kit` in `backend/app/services/brand_kit_store.py` so omitted fields preserve existing values, explicit null/empty fields clear values, partial data is stored as `in_progress`, empty colors are allowed only for incomplete kits, incomplete edits clear `summary` and `completed_at`, and the owned-brand transaction lock provides last-successful-save-wins behavior.
-- [ ] T029 [US2] Add explicit `Save progress` and automatic save-on-Next behavior to `frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx`; keep the user on the current page after a partial save and show `Saved`, `Saving...`, or an actionable error state.
-- [ ] T030 [US2] Add resume behavior to `frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx`: populate all fields from GET, restore the first incomplete step, allow Previous navigation, and do not overwrite local edits with a stale load response.
-- [ ] T031 [US2] Add the partial/resume browser journey to `frontend/tests/e2e/brand-kit.spec.ts`: verify empty `not_started`, save one answer, reload, verify `in_progress`, navigate backward/forward, and complete with optional fields omitted.
-- [ ] T032 [US2] Add clear validation messages in `frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx` for blank name, short audience, invalid tone, zero colors on completion, more than three colors, colors not matching the canonical six-digit hexadecimal format `#RRGGBB` (leading `#` required; hex digits case-insensitive), and overlong tagline; prevent network submission when client validation fails.
+- [X] T028 [US2] Extend `BrandKitStore.upsert_kit` in `backend/app/services/brand_kit_store.py` so omitted fields preserve existing values, explicit null/empty fields clear values, partial data is stored as `in_progress`, empty colors are allowed only for incomplete kits, incomplete edits clear `summary` and `completed_at`, and the owned-brand transaction lock provides last-successful-save-wins behavior.
+- [X] T029 [US2] Add explicit `Save progress` and automatic save-on-Next behavior to `frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx`; keep the user on the current page after a partial save and show `Saved`, `Saving...`, or an actionable error state.
+- [X] T030 [US2] Add resume behavior to `frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx`: populate all fields from GET, restore the first incomplete step, allow Previous navigation, and do not overwrite local edits with a stale load response.
+- [X] T031 [US2] Add the partial/resume browser journey to `frontend/tests/e2e/brand-kit.spec.ts`: verify empty `not_started`, save one answer, reload, verify `in_progress`, navigate backward/forward, and complete with optional fields omitted.
+- [X] T032 [US2] Add clear validation messages in `frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx` for blank name, short audience, invalid tone, zero colors on completion, more than three colors, colors not matching the canonical six-digit hexadecimal format `#RRGGBB` (leading `#` required; hex digits case-insensitive), and overlong tagline; prevent network submission when client validation fails.
 
 **US2 checkpoint**: Contract/unit/integration partial-state tests and the partial/resume Playwright test pass; a failed save leaves the previous valid response visible.
 
@@ -89,16 +89,16 @@
 
 ### Tests first
 
-- [ ] T033 [P] [US3] Add contract tests in `backend/tests/contract/test_brand_kits.py` for missing authorization, malformed authorization, non-owner GET, non-owner PUT, nonexistent brand, and safe error envelope/code/message.
-- [ ] T034 [P] [US3] Add direct RLS tests in `backend/tests/integration/test_brand_kit_rls.py` proving authenticated owner roles can read/write their own row, cannot read/write another user’s row, and cannot insert a row for another user’s brand.
-- [ ] T035 [P] [US3] Extend `backend/tests/integration/test_brand_kits.py` to delete a brand and assert its `brand_kits` row is physically removed; also assert cross-user API responses contain no answer, summary, or brand-name data.
+- [X] T033 [P] [US3] Add contract tests in `backend/tests/contract/test_brand_kits.py` for missing authorization, malformed authorization, non-owner GET, non-owner PUT, nonexistent brand, and safe error envelope/code/message.
+- [X] T034 [P] [US3] Add direct RLS tests in `backend/tests/integration/test_brand_kit_rls.py` proving authenticated owner roles can read/write their own row, cannot read/write another user’s row, and cannot insert a row for another user’s brand.
+- [X] T035 [P] [US3] Extend `backend/tests/integration/test_brand_kits.py` to delete a brand and assert its `brand_kits` row is physically removed; also assert cross-user API responses contain no answer, summary, or brand-name data.
 
 ### Implementation and verification
 
-- [ ] T036 [US3] Harden `backend/app/services/brand_kit_store.py` so every GET and PUT begins by resolving the brand through the owner-scoped lock and never queries a kit by `brand_id` alone before ownership is established.
-- [ ] T037 [US3] Verify `supabase/migrations/00017_create_brand_kits.sql` RLS, forced RLS, owner policy, cascade behavior, and service-role grants against `backend/tests/integration/test_brand_kit_rls.py`; adjust only the migration or privilege assertion if a test exposes a mismatch.
-- [ ] T038 [US3] Update `frontend/app/(dashboard)/layout.tsx` and `frontend/app/(dashboard)/brands/page.tsx` to display the derived `kit_status` (`Not started`, `In progress`, or `Complete`) without exposing another user’s brand data.
-- [ ] T039 [US3] Add unauthorized and status-indicator coverage to `frontend/tests/e2e/brand-kit.spec.ts`, including redirecting unauthenticated visitors and showing the correct status after empty, partial, and complete saves.
+- [X] T036 [US3] Harden `backend/app/services/brand_kit_store.py` so every GET and PUT begins by resolving the brand through the owner-scoped lock and never queries a kit by `brand_id` alone before ownership is established.
+- [X] T037 [US3] Verify `supabase/migrations/00017_create_brand_kits.sql` RLS, forced RLS, owner policy, cascade behavior, and service-role grants against `backend/tests/integration/test_brand_kit_rls.py`; adjust only the migration or privilege assertion if a test exposes a mismatch.
+- [X] T038 [US3] Update `frontend/app/(dashboard)/layout.tsx` and `frontend/app/(dashboard)/brands/page.tsx` to display the derived `kit_status` (`Not started`, `In progress`, or `Complete`) without exposing another user’s brand data.
+- [X] T039 [US3] Add unauthorized and status-indicator coverage to `frontend/tests/e2e/brand-kit.spec.ts`, including redirecting unauthenticated visitors and showing the correct status after empty, partial, and complete saves.
 
 **US3 checkpoint**: API ownership, direct RLS, hard-delete, and frontend status tests pass with generic 404 behavior for non-owners.
 

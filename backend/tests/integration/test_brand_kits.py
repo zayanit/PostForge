@@ -86,6 +86,21 @@ def test_real_supabase_create_save_read_edit_and_single_kit_row():
                 assert create.status_code == 201
                 brand_id = create.json()["id"]
 
+                partial = client.put(
+                    f"/api/v1/brands/{brand_id}/kit",
+                    headers=headers,
+                    json={
+                        "name": "My Brand",
+                        "answers": {"tagline": "Saved before reload"},
+                    },
+                )
+                resumed = client.get(
+                    f"/api/v1/brands/{brand_id}/kit", headers=headers
+                )
+                assert partial.status_code == 200
+                assert partial.json()["status"] == "in_progress"
+                assert resumed.json()["answers"]["tagline"] == "Saved before reload"
+
                 saved = client.put(
                     f"/api/v1/brands/{brand_id}/kit",
                     headers=headers,
@@ -113,6 +128,17 @@ def test_real_supabase_create_save_read_edit_and_single_kit_row():
                         },
                     },
                 )
+                invalid = client.put(
+                    f"/api/v1/brands/{brand_id}/kit",
+                    headers=headers,
+                    json={
+                        "name": "My Brand Updated",
+                        "answers": {"colors": ["invalid"]},
+                    },
+                )
+                after_invalid = client.get(
+                    f"/api/v1/brands/{brand_id}/kit", headers=headers
+                )
 
             assert saved.status_code == 200
             assert saved.json()["status"] == "complete"
@@ -123,6 +149,8 @@ def test_real_supabase_create_save_read_edit_and_single_kit_row():
             assert edited.json()["answers"]["tone"] == "friendly"
             assert edited.json()["summary"].startswith("Brand: My Brand Updated\n")
             assert edited.json()["completed_at"] == saved.json()["completed_at"]
+            assert invalid.status_code == 400
+            assert after_invalid.json() == edited.json()
 
             with get_engine().connect() as connection:
                 assert connection.execute(
@@ -150,3 +178,135 @@ def test_real_supabase_create_save_read_edit_and_single_kit_row():
                     cleanup_errors.append(exc)
             if cleanup_errors and not original_failure:
                 raise cleanup_errors[0]
+
+
+def test_real_supabase_brand_delete_cascades_the_kit_row():
+    supabase_url = _required_env("SUPABASE_URL")
+    supabase_key = _required_env("SUPABASE_SECRET_KEY")
+    _required_env("SUPABASE_JWT_SECRET")
+    _required_env("DATABASE_URL")
+
+    from backend.app.config import get_engine
+    from backend.app.main import app
+
+    user_id: str | None = None
+    brand_id: str | None = None
+    with httpx.Client(timeout=30.0) as supabase_client:
+        try:
+            user_id, access_token = _signup_and_login(
+                supabase_client,
+                supabase_url,
+                supabase_key,
+                f"brand-kit-delete-{uuid4().hex[:12]}@example.com",
+            )
+            headers = {"Authorization": f"Bearer {access_token}"}
+            with TestClient(app) as client:
+                brand = client.post(
+                    "/api/v1/brands", headers=headers, json={"name": "Delete Me"}
+                )
+                assert brand.status_code == 201
+                brand_id = brand.json()["id"]
+                saved = client.put(
+                    f"/api/v1/brands/{brand_id}/kit",
+                    headers=headers,
+                    json={
+                        "name": "Delete Me",
+                        "answers": {"tagline": "Private answer"},
+                    },
+                )
+                assert saved.status_code == 200
+
+            with get_engine().begin() as connection:
+                connection.execute(
+                    text("DELETE FROM brands WHERE id = :brand_id"),
+                    {"brand_id": brand_id},
+                )
+                assert connection.execute(
+                    text("SELECT count(*) FROM brand_kits WHERE brand_id = :brand_id"),
+                    {"brand_id": brand_id},
+                ).scalar_one() == 0
+        finally:
+            original_failure = sys.exc_info()[0] is not None
+            if brand_id:
+                try:
+                    with get_engine().begin() as connection:
+                        connection.execute(
+                            text("DELETE FROM brands WHERE id = :brand_id"),
+                            {"brand_id": brand_id},
+                        )
+                except Exception:
+                    if not original_failure:
+                        raise
+            if user_id:
+                    _delete_supabase_user(
+                        supabase_client, supabase_url, supabase_key, user_id
+                    )
+
+
+def test_real_supabase_non_owner_cannot_read_or_update_kit():
+    supabase_url = _required_env("SUPABASE_URL")
+    supabase_key = _required_env("SUPABASE_SECRET_KEY")
+    _required_env("SUPABASE_JWT_SECRET")
+    _required_env("DATABASE_URL")
+
+    from backend.app.config import get_engine
+    from backend.app.main import app
+
+    user_a_id: str | None = None
+    user_b_id: str | None = None
+    brand_id: str | None = None
+    with httpx.Client(timeout=30.0) as supabase_client:
+        try:
+            user_a_id, token_a = _signup_and_login(
+                supabase_client,
+                supabase_url,
+                supabase_key,
+                f"brand-kit-owner-{uuid4().hex[:12]}@example.com",
+            )
+            user_b_id, token_b = _signup_and_login(
+                supabase_client,
+                supabase_url,
+                supabase_key,
+                f"brand-kit-other-{uuid4().hex[:12]}@example.com",
+            )
+            with TestClient(app) as client:
+                created = client.post(
+                    "/api/v1/brands",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                    json={"name": "Owner Only Kit"},
+                )
+                assert created.status_code == 201
+                brand_id = created.json()["id"]
+                saved = client.put(
+                    f"/api/v1/brands/{brand_id}/kit",
+                    headers={"Authorization": f"Bearer {token_a}"},
+                    json={"name": "Owner Only Kit", "answers": {"tagline": "Secret"}},
+                )
+                non_owner_get = client.get(
+                    f"/api/v1/brands/{brand_id}/kit",
+                    headers={"Authorization": f"Bearer {token_b}"},
+                )
+                non_owner_put = client.put(
+                    f"/api/v1/brands/{brand_id}/kit",
+                    headers={"Authorization": f"Bearer {token_b}"},
+                    json={"name": "Leaked Name", "answers": {"tagline": "Leaked"}},
+                )
+
+            assert saved.status_code == 200
+            for response in (non_owner_get, non_owner_put):
+                assert response.status_code == 404
+                assert response.json()["error"]["code"] == "BRAND_NOT_FOUND"
+                assert "Secret" not in response.text
+                assert "Owner Only Kit" not in response.text
+        finally:
+            if brand_id:
+                with get_engine().begin() as connection:
+                    connection.execute(
+                        text("DELETE FROM brands WHERE id = :brand_id"),
+                        {"brand_id": brand_id},
+                    )
+            for user_id in (user_a_id, user_b_id):
+                if user_id:
+                    _delete_supabase_user(
+                        supabase_client, supabase_url, supabase_key, user_id
+                    )

@@ -12,8 +12,15 @@ type Brand = {
   name: string;
   logo_url: string | null;
   cleanup_state: "normal" | "cleanup_required";
+  kit_status: "not_started" | "in_progress" | "complete";
   created_at: string;
 };
+
+const KIT_STATUS_LABELS = {
+  not_started: "Not started",
+  in_progress: "In progress",
+  complete: "Complete",
+} as const;
 
 export default function BrandsPage() {
   const router = useRouter();
@@ -131,6 +138,9 @@ export default function BrandsPage() {
                     Cleanup required
                   </span>
                 ) : null}
+                <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
+                  {KIT_STATUS_LABELS[brand.kit_status]}
+                </span>
               </div>
               <p className="mt-1 text-xs text-gray-500">
                 Created {new Date(brand.created_at).toLocaleDateString()}
