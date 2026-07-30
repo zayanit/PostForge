@@ -198,7 +198,12 @@ class BrandKitStore:
                         avoid_words = EXCLUDED.avoid_words,
                         summary = EXCLUDED.summary,
                         status = EXCLUDED.status,
-                        completed_at = EXCLUDED.completed_at
+                        completed_at = CASE
+                            WHEN brand_kits.status = 'complete'
+                                 AND EXCLUDED.status = 'complete'
+                            THEN brand_kits.completed_at
+                            ELSE EXCLUDED.completed_at
+                        END
                     """
                     ),
                     {

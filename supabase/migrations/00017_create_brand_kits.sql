@@ -110,5 +110,6 @@ CREATE POLICY brand_kits_owner ON brand_kits
   USING (private.is_brand_owner(brand_id))
   WITH CHECK (private.is_brand_owner(brand_id));
 
-REVOKE ALL ON brand_kits FROM PUBLIC, anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON brand_kits TO service_role;
+REVOKE ALL ON brand_kits FROM PUBLIC, anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE brand_kits TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE brand_kits TO service_role;

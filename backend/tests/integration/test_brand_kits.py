@@ -97,6 +97,7 @@ def test_real_supabase_create_save_read_edit_and_single_kit_row():
             assert edited.json()["brand_name"] == "My Brand Updated"
             assert edited.json()["answers"]["tone"] == "friendly"
             assert edited.json()["summary"].startswith("Brand: My Brand Updated\n")
+            assert edited.json()["completed_at"] == saved.json()["completed_at"]
 
             with get_engine().connect() as connection:
                 assert connection.execute(
