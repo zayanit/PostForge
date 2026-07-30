@@ -28,6 +28,7 @@ class Brand(BaseModel):
     name: str
     logo_url: str | None
     cleanup_state: Literal["normal", "cleanup_required"] = "normal"
+    kit_status: Literal["not_started", "in_progress", "complete"] = "not_started"
     created_at: datetime
 
 

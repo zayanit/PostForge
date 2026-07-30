@@ -355,6 +355,7 @@ def test_create_brand_returns_public_contract_shape():
             "name": "Acme Coffee",
             "logo_url": None,
             "cleanup_state": "normal",
+            "kit_status": "not_started",
             "created_at": "2026-07-25T00:00:00Z",
         }
     finally:
@@ -379,12 +380,14 @@ def test_list_brands_returns_empty_and_populated_contract_shapes():
                     id=UUID("33333333-3333-3333-3333-333333333333"),
                     name="New Brand",
                     logo_url=None,
+                    kit_status="in_progress",
                     created_at=datetime(2026, 7, 26, tzinfo=UTC),
                 ),
                 Brand(
                     id=UUID("22222222-2222-2222-2222-222222222222"),
                     name="First Brand",
                     logo_url=None,
+                    kit_status="complete",
                     created_at=datetime(2026, 7, 25, tzinfo=UTC),
                 ),
             ]
@@ -400,6 +403,7 @@ def test_list_brands_returns_empty_and_populated_contract_shapes():
                     "name": "New Brand",
                     "logo_url": None,
                     "cleanup_state": "normal",
+                    "kit_status": "in_progress",
                     "created_at": "2026-07-26T00:00:00Z",
                 },
                 {
@@ -407,6 +411,7 @@ def test_list_brands_returns_empty_and_populated_contract_shapes():
                     "name": "First Brand",
                     "logo_url": None,
                     "cleanup_state": "normal",
+                    "kit_status": "complete",
                     "created_at": "2026-07-25T00:00:00Z",
                 },
             ]
