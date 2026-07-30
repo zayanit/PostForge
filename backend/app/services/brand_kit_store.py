@@ -185,9 +185,9 @@ class BrandKitStore:
                         brand_id, tagline, tone, audience, colors, avoid_words,
                         summary, status, completed_at
                     ) VALUES (
-                        :brand_id, :tagline, CAST(:tone AS tone_t), :audience,
+                        :brand_id, :tagline, CAST(:tone AS public.tone_t), :audience,
                         :colors, :avoid_words, :summary,
-                        CAST(:status AS kit_status_t),
+                        CAST(:status AS public.kit_status_t),
                         CASE WHEN :status = 'complete' THEN now() ELSE NULL END
                     )
                     ON CONFLICT (brand_id) DO UPDATE SET

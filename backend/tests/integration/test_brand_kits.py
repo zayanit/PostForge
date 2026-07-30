@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from uuid import uuid4
 
 import httpx
@@ -25,13 +26,37 @@ def _signup_and_login(
         json={"email": email, "password": "12345678"},
     )
     assert signup.status_code in {200, 201}
-    token = client.post(
-        f"{supabase_url}/auth/v1/token?grant_type=password",
-        headers={"apikey": supabase_key, "Content-Type": "application/json"},
-        json={"email": email, "password": "12345678"},
+    user_id = signup.json()["user"]["id"]
+    try:
+        token = client.post(
+            f"{supabase_url}/auth/v1/token?grant_type=password",
+            headers={"apikey": supabase_key, "Content-Type": "application/json"},
+            json={"email": email, "password": "12345678"},
+        )
+        assert token.status_code == 200
+        return user_id, token.json()["access_token"]
+    except Exception:
+        try:
+            _delete_supabase_user(client, supabase_url, supabase_key, user_id)
+        except Exception:
+            pass
+        raise
+
+
+def _delete_supabase_user(
+    client: httpx.Client,
+    supabase_url: str,
+    supabase_key: str,
+    user_id: str,
+) -> None:
+    response = client.delete(
+        f"{supabase_url}/auth/v1/admin/users/{user_id}",
+        headers={
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}",
+        },
     )
-    assert token.status_code == 200
-    return signup.json()["user"]["id"], token.json()["access_token"]
+    response.raise_for_status()
 
 
 def test_real_supabase_create_save_read_edit_and_single_kit_row():
@@ -105,17 +130,23 @@ def test_real_supabase_create_save_read_edit_and_single_kit_row():
                     {"brand_id": brand_id},
                 ).scalar_one() == 1
         finally:
+            original_failure = sys.exc_info()[0] is not None
+            cleanup_errors: list[Exception] = []
             if brand_id:
-                with get_engine().begin() as connection:
-                    connection.execute(
-                        text("DELETE FROM brands WHERE id = :brand_id"),
-                        {"brand_id": brand_id},
-                    )
+                try:
+                    with get_engine().begin() as connection:
+                        connection.execute(
+                            text("DELETE FROM brands WHERE id = :brand_id"),
+                            {"brand_id": brand_id},
+                        )
+                except Exception as exc:
+                    cleanup_errors.append(exc)
             if user_id:
-                supabase_client.delete(
-                    f"{supabase_url}/auth/v1/admin/users/{user_id}",
-                    headers={
-                        "apikey": supabase_key,
-                        "Authorization": f"Bearer {supabase_key}",
-                    },
-                )
+                try:
+                    _delete_supabase_user(
+                        supabase_client, supabase_url, supabase_key, user_id
+                    )
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            if cleanup_errors and not original_failure:
+                raise cleanup_errors[0]
