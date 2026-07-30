@@ -86,6 +86,34 @@ def test_real_supabase_create_save_read_edit_and_single_kit_row():
                 assert create.status_code == 201
                 brand_id = create.json()["id"]
 
+                initial = client.get(
+                    f"/api/v1/brands/{brand_id}/kit", headers=headers
+                )
+                empty = client.put(
+                    f"/api/v1/brands/{brand_id}/kit",
+                    headers=headers,
+                    json={"name": "My Brand", "answers": {}},
+                )
+                assert initial.status_code == 200
+                assert initial.json()["status"] == "not_started"
+                assert initial.json()["answers"] == {
+                    "tagline": None,
+                    "tone": None,
+                    "audience": None,
+                    "colors": [],
+                    "avoid_words": None,
+                }
+                assert empty.status_code == 200
+                assert empty.json()["status"] == "not_started"
+                with get_engine().connect() as connection:
+                    assert connection.execute(
+                        text(
+                            "SELECT count(*) FROM brand_kits "
+                            "WHERE brand_id = :brand_id"
+                        ),
+                        {"brand_id": brand_id},
+                    ).scalar_one() == 0
+
                 partial = client.put(
                     f"/api/v1/brands/{brand_id}/kit",
                     headers=headers,
@@ -100,6 +128,25 @@ def test_real_supabase_create_save_read_edit_and_single_kit_row():
                 assert partial.status_code == 200
                 assert partial.json()["status"] == "in_progress"
                 assert resumed.json()["answers"]["tagline"] == "Saved before reload"
+
+                cleared = client.put(
+                    f"/api/v1/brands/{brand_id}/kit",
+                    headers=headers,
+                    json={
+                        "name": "My Brand",
+                        "answers": {"tagline": None},
+                    },
+                )
+                assert cleared.status_code == 200
+                assert cleared.json()["status"] == "not_started"
+                with get_engine().connect() as connection:
+                    assert connection.execute(
+                        text(
+                            "SELECT count(*) FROM brand_kits "
+                            "WHERE brand_id = :brand_id"
+                        ),
+                        {"brand_id": brand_id},
+                    ).scalar_one() == 0
 
                 saved = client.put(
                     f"/api/v1/brands/{brand_id}/kit",
@@ -215,12 +262,15 @@ def test_real_supabase_brand_delete_cascades_the_kit_row():
                     },
                 )
                 assert saved.status_code == 200
-
-            with get_engine().begin() as connection:
-                connection.execute(
-                    text("DELETE FROM brands WHERE id = :brand_id"),
-                    {"brand_id": brand_id},
+                deleted = client.request(
+                    "DELETE",
+                    f"/api/v1/brands/{brand_id}",
+                    headers=headers,
+                    json={"confirm_name": "Delete Me"},
                 )
+
+            assert deleted.status_code == 204
+            with get_engine().connect() as connection:
                 assert connection.execute(
                     text("SELECT count(*) FROM brand_kits WHERE brand_id = :brand_id"),
                     {"brand_id": brand_id},
@@ -282,6 +332,7 @@ def test_real_supabase_non_owner_cannot_read_or_update_kit():
                     headers={"Authorization": f"Bearer {token_a}"},
                     json={"name": "Owner Only Kit", "answers": {"tagline": "Secret"}},
                 )
+                unauthenticated = client.get(f"/api/v1/brands/{brand_id}/kit")
                 non_owner_get = client.get(
                     f"/api/v1/brands/{brand_id}/kit",
                     headers={"Authorization": f"Bearer {token_b}"},
@@ -293,6 +344,7 @@ def test_real_supabase_non_owner_cannot_read_or_update_kit():
                 )
 
             assert saved.status_code == 200
+            assert unauthenticated.status_code == 401
             for response in (non_owner_get, non_owner_put):
                 assert response.status_code == 404
                 assert response.json()["error"]["code"] == "BRAND_NOT_FOUND"

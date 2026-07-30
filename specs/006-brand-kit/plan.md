@@ -64,6 +64,7 @@ backend/tests/contract/test_brand_kits.py
 backend/tests/unit/test_brand_kit_store.py
 backend/tests/integration/test_brand_kit_rls.py
 backend/tests/integration/test_brand_kits.py
+backend/tests/integration/benchmark_brand_kits.py
 
 frontend/app/(dashboard)/brands/page.tsx
 frontend/app/(dashboard)/brands/[brandId]/kit/page.tsx

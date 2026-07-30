@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from backend.app.auth import CurrentUser, get_current_user
 from backend.app.main import app
 from backend.app.models.brand_kit import BrandKit, BrandKitUpsert
+from backend.app.routes import brand_kits as brand_kit_routes
 from backend.app.routes.brand_kits import get_brand_kit_store
 from backend.app.services.brand_kit_store import derive_summary
 from backend.app.services.brand_store import BrandNameTakenError
@@ -317,6 +318,45 @@ def test_repeated_puts_keep_a_single_logical_kit_payload():
                 assert response.status_code == 200
 
         assert len(store.saved_payloads) == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_and_put_logs_only_safe_metadata(monkeypatch: pytest.MonkeyPatch):
+    private_answer = "Never log this private answer"
+    logged: list[tuple[str, dict[str, str]]] = []
+    monkeypatch.setattr(
+        brand_kit_routes.logger,
+        "info",
+        lambda message, *, extra: logged.append((message, extra)),
+    )
+    try:
+        with _client(FakeBrandKitStore()) as client:
+            get_response = client.get(f"/api/v1/brands/{BRAND_ID}/kit")
+            put_response = client.put(
+                f"/api/v1/brands/{BRAND_ID}/kit",
+                json={
+                    "name": "Private Brand",
+                    "answers": {"tagline": private_answer},
+                },
+            )
+
+        assert get_response.status_code == 200
+        assert put_response.status_code == 200
+        assert [message for message, _ in logged] == [
+            "brand_kits.get_success",
+            "brand_kits.put_success",
+        ]
+        assert all(set(extra) == {"event", "request_id"} for _, extra in logged)
+        assert all(extra["request_id"] for _, extra in logged)
+        for private_value in (
+            private_answer,
+            "Private Brand",
+            OWNER_USER_ID,
+            "owner@example.com",
+            "redacted",
+        ):
+            assert private_value not in repr(logged)
     finally:
         app.dependency_overrides.clear()
 

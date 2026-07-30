@@ -179,6 +179,15 @@ class BrandKitStore:
                     ),
                     {"brand_id": brand_id, "name": payload.name},
                 )
+                if status is KitStatus.NOT_STARTED:
+                    connection.execute(
+                        text("DELETE FROM brand_kits WHERE brand_id = :brand_id"),
+                        {"brand_id": brand_id},
+                    )
+                    return self._empty_kit(
+                        {"id": brand_id, "name": payload.name}
+                    )
+
                 connection.execute(
                     text(
                         """

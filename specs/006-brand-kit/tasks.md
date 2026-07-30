@@ -104,14 +104,14 @@
 
 ## Phase 6: Polish and cross-cutting validation
 
-- [ ] T040 [P] Update `backend/tests/contract/test_brands.py` and any affected brand fixtures to assert the new `kit_status` field without breaking existing brand CRUD behavior.
-- [ ] T041 Run `backend/.venv/bin/python -m pytest -q backend/tests/contract/test_brand_kits.py backend/tests/unit/test_brand_kit_store.py backend/tests/contract/test_brands.py` and fix only failures caused by this feature.
-- [ ] T042 Run `backend/.venv/bin/python -m pytest -q backend/tests` from the repository root and record the result in `specs/006-brand-kit/quickstart.md`.
-- [ ] T043 Run `cd frontend && npm run lint`, `cd frontend && npx playwright test tests/e2e/brand-kit.spec.ts`, and `cd frontend && npm run build`; record exact outcomes in `specs/006-brand-kit/quickstart.md`.
-- [ ] T044 Run the complete `specs/006-brand-kit/quickstart.md` manual/API validation sequence against local Supabase and confirm the documented zero-answer, partial, complete, unauthorized, and hard-delete outcomes.
-- [ ] T045 Verify the applicable constitution checks in `.specify/memory/constitution.md`: acceptance layers, brand-kit zero/complete cases, RLS/forced RLS/privileges, server ownership, safe logging, and physical kit deletion; document provider/generation checks as N/A because this feature does not call them.
-- [ ] T046 Measure owner-scoped kit GET/PUT p95 latency under normal local load using `backend/tests/integration/test_brand_kits.py` or a focused benchmark, and record the measured result against the 500ms goal in `specs/006-brand-kit/quickstart.md`.
-- [ ] T047 Run `git diff --check`, review `git status --short`, and ensure `specs/006-brand-kit/tasks.md` has every completed task marked `[x]` before handoff, after T046 is complete.
+- [X] T040 [P] Update `backend/tests/contract/test_brands.py` and any affected brand fixtures to assert the new `kit_status` field without breaking existing brand CRUD behavior.
+- [X] T041 Run `backend/.venv/bin/python -m pytest -q backend/tests/contract/test_brand_kits.py backend/tests/unit/test_brand_kit_store.py backend/tests/contract/test_brands.py` and fix only failures caused by this feature.
+- [X] T042 Run `backend/.venv/bin/python -m pytest -q backend/tests` from the repository root and record the result in `specs/006-brand-kit/quickstart.md`.
+- [X] T043 Run `cd frontend && npm run lint`, `cd frontend && npx playwright test tests/e2e/brand-kit.spec.ts`, and `cd frontend && npm run build`; record exact outcomes in `specs/006-brand-kit/quickstart.md`.
+- [X] T044 Run the complete `specs/006-brand-kit/quickstart.md` manual/API validation sequence against local Supabase and confirm the documented zero-answer, partial, complete, unauthorized, and hard-delete outcomes.
+- [X] T045 Verify the applicable constitution checks in `.specify/memory/constitution.md`: acceptance layers, brand-kit zero/complete cases, RLS/forced RLS/privileges, server ownership, safe logging, and physical kit deletion; document provider/generation checks as N/A because this feature does not call them.
+- [X] T046 Measure owner-scoped kit GET/PUT p95 latency under normal local load using `backend/tests/integration/test_brand_kits.py` or a focused benchmark, and record the measured result against the 500ms goal in `specs/006-brand-kit/quickstart.md`.
+- [X] T047 Run `git diff --check`, review `git status --short`, and ensure `specs/006-brand-kit/tasks.md` has every completed task marked `[x]` before handoff, after T046 is complete.
 
 ## Dependencies and execution order
 
