@@ -18,7 +18,7 @@ const brandFormSchema = z.object({
     const normalized = normalizeBrandName(value);
     if (normalized.length < 2 || normalized.length > 120) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "Brand name must be between 2 and 120 characters.",
       });
     }

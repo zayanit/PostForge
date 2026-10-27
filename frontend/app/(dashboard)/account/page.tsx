@@ -18,7 +18,7 @@ const profileFormSchema = z
     const fullName = values.full_name.trim();
     if (values.full_name !== "" && (fullName.length < 2 || fullName.length > 120)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["full_name"],
         message: "Full name must be between 2 and 120 characters.",
       });
@@ -27,7 +27,7 @@ const profileFormSchema = z
     const avatarUrl = values.avatar_url.trim();
     if (values.avatar_url !== "" && !/^https?:\/\/.+/.test(avatarUrl)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["avatar_url"],
         message: "Avatar URL must be a valid http or https URL.",
       });
