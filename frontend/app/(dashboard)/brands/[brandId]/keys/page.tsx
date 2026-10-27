@@ -605,7 +605,7 @@ export default function ProviderKeysPage() {
         {PROVIDERS.map((item) => (
           <button
             className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition ${
-              provider === item.id ? "bg-white shadow-sm" : "text-gray-600 hover:text-black"
+              provider === item.id ? "bg-white shadow-xs" : "text-gray-600 hover:text-black"
             }`}
             key={item.id}
             type="button"
@@ -656,7 +656,7 @@ export default function ProviderKeysPage() {
                 key.is_valid === false;
 
               return (
-                <article className="rounded-xl border bg-white p-5 shadow-sm" key={key.id}>
+                <article className="rounded-xl border bg-white p-5 shadow-xs" key={key.id}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <h3 className="font-semibold">{key.label || `${providerName} key`}</h3>
@@ -743,7 +743,7 @@ export default function ProviderKeysPage() {
           )}
         </div>
 
-        <form className="h-fit space-y-5 rounded-xl border bg-white p-6 shadow-sm" onSubmit={addKey} noValidate>
+        <form className="h-fit space-y-5 rounded-xl border bg-white p-6 shadow-xs" onSubmit={addKey} noValidate>
           <div>
             <h2 className="font-semibold">Add {providerName} key</h2>
             <p className="mt-1 text-sm text-gray-600">The credential cannot be revealed after it is stored.</p>
@@ -751,7 +751,7 @@ export default function ProviderKeysPage() {
           <label className="block space-y-2">
             <span className="text-sm font-medium">Label <span className="font-normal text-gray-500">(optional)</span></span>
             <input
-              className="w-full rounded-md border px-3 py-2 text-sm outline-none focus:border-black"
+              className="w-full rounded-md border px-3 py-2 text-sm outline-hidden focus:border-black"
               type="text"
               maxLength={100}
               value={label}
@@ -766,7 +766,7 @@ export default function ProviderKeysPage() {
             <span className="text-sm font-medium">API key</span>
             <input
               ref={keyInputRef}
-              className="w-full rounded-md border px-3 py-2 text-sm outline-none focus:border-black"
+              className="w-full rounded-md border px-3 py-2 text-sm outline-hidden focus:border-black"
               type="password"
               autoComplete="new-password"
               disabled={isAdding || addBlockedByCleanup}

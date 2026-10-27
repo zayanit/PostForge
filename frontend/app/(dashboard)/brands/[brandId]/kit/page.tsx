@@ -346,19 +346,19 @@ export default function BrandKitPage() {
           {step === 0 ? (
             <label className="block space-y-2">
               <span className="text-sm font-medium">Brand name</span>
-              <input className="w-full rounded-md border px-3 py-2 text-sm outline-none focus:border-black" type="text" value={fieldProps.value.name} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("name", event.target.value)} />
+              <input className="w-full rounded-md border px-3 py-2 text-sm outline-hidden focus:border-black" type="text" value={fieldProps.value.name} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("name", event.target.value)} />
             </label>
           ) : null}
           {step === 1 ? (
             <label className="block space-y-2">
               <span className="text-sm font-medium">Tagline <span className="font-normal text-gray-500">(optional)</span></span>
-              <input className="w-full rounded-md border px-3 py-2 text-sm outline-none focus:border-black" type="text" value={fieldProps.value.tagline} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("tagline", event.target.value)} />
+              <input className="w-full rounded-md border px-3 py-2 text-sm outline-hidden focus:border-black" type="text" value={fieldProps.value.tagline} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("tagline", event.target.value)} />
             </label>
           ) : null}
           {step === 2 ? (
             <label className="block space-y-2">
               <span className="text-sm font-medium">Tone</span>
-              <select className="w-full rounded-md border bg-white px-3 py-2 text-sm outline-none focus:border-black" value={fieldProps.value.tone} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("tone", event.target.value)}>
+              <select className="w-full rounded-md border bg-white px-3 py-2 text-sm outline-hidden focus:border-black" value={fieldProps.value.tone} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("tone", event.target.value)}>
                 <option value="">Choose a tone</option>
                 <option value="formal">Formal</option>
                 <option value="casual">Casual</option>
@@ -371,20 +371,20 @@ export default function BrandKitPage() {
           {step === 3 ? (
             <label className="block space-y-2">
               <span className="text-sm font-medium">Audience</span>
-              <textarea className="min-h-28 w-full rounded-md border px-3 py-2 text-sm outline-none focus:border-black" value={fieldProps.value.audience} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("audience", event.target.value)} />
+              <textarea className="min-h-28 w-full rounded-md border px-3 py-2 text-sm outline-hidden focus:border-black" value={fieldProps.value.audience} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("audience", event.target.value)} />
             </label>
           ) : null}
           {step === 4 ? (
             <label className="block space-y-2">
               <span className="text-sm font-medium">Colors</span>
-              <input className="w-full rounded-md border px-3 py-2 text-sm outline-none focus:border-black" type="text" placeholder="#FF5733, #3498DB" value={fieldProps.value.colors} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("colors", event.target.value)} />
+              <input className="w-full rounded-md border px-3 py-2 text-sm outline-hidden focus:border-black" type="text" placeholder="#FF5733, #3498DB" value={fieldProps.value.colors} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("colors", event.target.value)} />
               <span className="block text-xs text-gray-500">Enter 1 to 3 six-digit hex colors separated by commas.</span>
             </label>
           ) : null}
           {step === 5 ? (
             <label className="block space-y-2">
               <span className="text-sm font-medium">Avoid words <span className="font-normal text-gray-500">(optional)</span></span>
-              <textarea className="min-h-28 w-full rounded-md border px-3 py-2 text-sm outline-none focus:border-black" value={fieldProps.value.avoidWords} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("avoidWords", event.target.value)} />
+              <textarea className="min-h-28 w-full rounded-md border px-3 py-2 text-sm outline-hidden focus:border-black" value={fieldProps.value.avoidWords} disabled={fieldProps.disabled} onChange={(event) => fieldProps.updateValue("avoidWords", event.target.value)} />
             </label>
           ) : null}
         </div>

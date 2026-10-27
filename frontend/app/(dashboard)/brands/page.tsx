@@ -122,7 +122,7 @@ export default function BrandsPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {brands.map((brand) => (
             <Link
-              className="group rounded-xl border p-5 transition hover:-translate-y-0.5 hover:border-gray-400 hover:shadow-sm"
+              className="group rounded-xl border p-5 transition hover:-translate-y-0.5 hover:border-gray-400 hover:shadow-xs"
               href={`/brands/${brand.id}`}
               key={brand.id}
             >
