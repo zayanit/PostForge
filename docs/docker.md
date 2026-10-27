@@ -1,7 +1,12 @@
 # Docker Deployment
 
 This runbook builds and runs the PostForge frontend and backend as one `linux/amd64`
-container. Run every local command from the repository root.
+container, including its durable generation worker. Run every local command from the repository root.
+
+Apply migration `00019_create_generations.sql` before upgrading. The container now
+supervises the worker and requires a heartbeat updated within 60 seconds for health
+checks. See [the generation runbook](generations.md) for queue recovery, private
+storage, Windows setup, and release verification. Existing logo URLs are unchanged.
 
 ## Prerequisites
 

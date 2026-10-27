@@ -1,9 +1,22 @@
 # PostForge - Implementation Plan
 
-**Version**: 1.5.0
+**Version**: 1.6.0
 **Date**: 2026-02-08
 **Status**: Approved
 **Constitution**: v2.0.0
+
+## Current release status (2026-10-27)
+
+Brand Kit is implemented. The first generation release implements OpenAI-only
+generation, all 13 presets, private PNG storage, durable PostgreSQL jobs, signed
+downloads, and basic history with status filtering and permanent deletion. It
+allows incomplete kits and does not add logo processing or Gemini generation.
+
+This release supersedes the synchronous generation example and public generation
+URLs below: submission now returns 202, a separate supervised worker processes
+jobs, and image URLs expire after five minutes. The remaining provider/logo work
+stays on the roadmap. See `docs/generations.md` for the implemented contract and
+`docs/generation-verification.md` for checks and outstanding release gates.
 
 ---
 

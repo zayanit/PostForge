@@ -19,7 +19,8 @@ check_url() {
 }
 
 if check_url "http://127.0.0.1:8000/health" \
-  && check_url "http://127.0.0.1:3000/login"; then
+  && check_url "http://127.0.0.1:3000/login" \
+  && python -c 'import os,pathlib,time; p=pathlib.Path(os.getenv("GENERATION_WORKER_HEARTBEAT", "/tmp/postforge-worker-heartbeat")); assert p.exists() and time.time()-float(p.read_text()) < 60'; then
   exit 0
 fi
 

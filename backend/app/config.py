@@ -84,6 +84,10 @@ _DATABASE_ROLE_PRIVILEGES = text(
         AND has_table_privilege(current_user, 'public.brand_kits', 'INSERT')
         AND has_table_privilege(current_user, 'public.brand_kits', 'UPDATE')
         AND has_table_privilege(current_user, 'public.brand_kits', 'DELETE')
+        AND has_table_privilege(current_user, 'public.generations', 'SELECT')
+        AND has_table_privilege(current_user, 'public.generations', 'INSERT')
+        AND has_table_privilege(current_user, 'public.generations', 'UPDATE')
+        AND has_table_privilege(current_user, 'public.generations', 'DELETE')
         AS application_dml,
       has_schema_privilege(current_user, 'vault', 'USAGE') AS vault_schema_usage,
       has_function_privilege(

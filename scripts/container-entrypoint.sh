@@ -3,6 +3,7 @@ set -euo pipefail
 
 backend_pid=""
 frontend_pid=""
+worker_pid=""
 shutting_down=false
 shutdown_signal=TERM
 
@@ -32,6 +33,18 @@ start_frontend() {
   fi
 }
 
+start_worker() {
+  (
+    cd /app/backend
+    exec python -m app.worker
+  ) &
+  worker_pid=$!
+  printf 'Started generation worker (pid %s)\n' "$worker_pid"
+  if [[ "$shutting_down" == true ]]; then
+    kill -s "$shutdown_signal" "$worker_pid" 2>/dev/null || true
+  fi
+}
+
 request_shutdown() {
   local signal=$1
 
@@ -48,6 +61,9 @@ request_shutdown() {
   fi
   if [[ -n "$frontend_pid" ]] && kill -0 "$frontend_pid" 2>/dev/null; then
     kill -s "$signal" "$frontend_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$worker_pid" ]] && kill -0 "$worker_pid" 2>/dev/null; then
+    kill -s "$signal" "$worker_pid" 2>/dev/null || true
   fi
 }
 
@@ -66,10 +82,13 @@ start_backend
 if [[ "$shutting_down" == false ]]; then
   start_frontend
 fi
+if [[ "$shutting_down" == false ]]; then
+  start_worker
+fi
 
 while [[ "$shutting_down" == false ]]; do
   exit_status=0
-  wait -n "$backend_pid" "$frontend_pid" || exit_status=$?
+  wait -n "$backend_pid" "$frontend_pid" "$worker_pid" || exit_status=$?
 
   if [[ "$shutting_down" == true ]]; then
     break
@@ -86,7 +105,13 @@ while [[ "$shutting_down" == false ]]; do
     printf 'Frontend exited with status %s; restarting\n' "$exit_status"
     start_frontend
   fi
+  if ! kill -0 "$worker_pid" 2>/dev/null; then
+    wait_for_child "$worker_pid"
+    printf 'Generation worker exited with status %s; restarting\n' "$exit_status"
+    start_worker
+  fi
 done
 
 wait_for_child "$backend_pid"
 wait_for_child "$frontend_pid"
+wait_for_child "$worker_pid"

@@ -2,7 +2,7 @@
 
 PostForge is a multi-brand SaaS for managing brand identities and securely connecting OpenAI and Google Gemini API keys (BYOK). The current product includes authentication, profiles, Brand CRUD, provider-key storage/validation/activation/deletion, retryable Vault and Storage cleanup, and a Docker deployment image.
 
-Brand Kit interviews and image generation are planned but are not implemented yet. Live disposable OpenAI/Gemini validation remains a release-verification step; deterministic provider tests and all local automated checks are in place.
+Brand Kit interviews are implemented. This release adds OpenAI image generation with durable jobs, exact platform dimensions, private PNG downloads, and history. Empty and partial Brand Kits are supported. Gemini generation and logo processing are deferred. See [the generation runbook](docs/generations.md) for migration, worker setup, and verification status. Live provider checks remain a separate release-verification step.
 
 ## Technology
 
@@ -68,6 +68,14 @@ make dev-backend
 # Terminal 2
 make dev-frontend
 ```
+
+Run the generation worker in a third terminal with the same backend environment:
+
+```bash
+make dev-worker
+```
+
+Apply migration `00019_create_generations.sql` before starting the upgraded services. Windows PowerShell setup and worker commands are in [docs/generations.md](docs/generations.md).
 
 Open [http://localhost:3000](http://localhost:3000), create an account, confirm it through the local Mailpit inbox if required, and create a brand. Provider keys are available from the brand’s **Manage provider keys** page.
 

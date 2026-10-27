@@ -24,11 +24,14 @@ BACKEND_PY   := backend/.venv/bin/python
 
 .DEFAULT_GOAL := help
 
+dev-worker: ## Run the durable image generation worker
+	$(BACKEND_PY) -m backend.app.worker
+
 .PHONY: help \
 	build up down restart logs ps health shell rebuild prune \
 	install install-frontend install-backend venv \
-	dev dev-frontend dev-backend \
-	test test-backend test-e2e \
+	dev dev-frontend dev-backend dev-worker \
+	test test-backend test-e2e test-e2e-generations \
 	lint lint-frontend lint-backend typecheck format format-frontend format-backend \
 	supabase-start supabase-stop supabase-migrate \
 	clean
@@ -102,9 +105,11 @@ venv: ## Create the backend virtualenv (backend/.venv)
 # Local development servers
 # ---------------------------------------------------------------------------
 
-dev: ## Run backend (background) and frontend (foreground) dev servers together
-	@trap 'kill %1 2>/dev/null' EXIT; \
-	( cd $(BACKEND_DIR) && .venv/bin/python -m uvicorn app.main:app --reload --port 8000 ) & \
+dev: ## Run backend, generation worker, and frontend dev servers together
+	@backend_pid=; worker_pid=; \
+	trap 'kill "$$backend_pid" "$$worker_pid" 2>/dev/null || true' EXIT INT TERM; \
+	( cd $(BACKEND_DIR) && .venv/bin/python -m uvicorn app.main:app --reload --port 8000 ) & backend_pid=$$!; \
+	$(BACKEND_PY) -m backend.app.worker & worker_pid=$$!; \
 	cd $(FRONTEND_DIR) && npm run dev
 
 dev-frontend: ## Run the frontend dev server only
@@ -124,6 +129,9 @@ test-backend: ## Run backend tests (must run from repo root — imports are back
 
 test-e2e: ## Run frontend Playwright e2e tests (needs the app + Supabase already running)
 	cd $(FRONTEND_DIR) && npx playwright test
+
+test-e2e-generations: ## Run isolated generation and visitor browser checks
+	cd $(FRONTEND_DIR) && npx playwright test --config playwright.generations.config.ts
 
 # ---------------------------------------------------------------------------
 # Lint / format / typecheck
