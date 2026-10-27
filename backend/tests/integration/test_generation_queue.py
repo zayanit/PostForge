@@ -264,6 +264,68 @@ def test_atomic_claim_and_stale_lease_cannot_publish(setup):
     assert store.finish(recovered, error="GENERATION_INTERRUPTED")
 
 
+def test_claims_follow_oldest_job_across_brands(setup):
+    store, owner, older_brand = setup
+    newer_brand, newer_owner, key = uuid4(), uuid4(), uuid4()
+    with store.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO brands(id,owner_user_id,name,created_at) VALUES "
+                "(:brand,:owner,'Newer brand',now()+interval '1 day')"
+            ),
+            dict(brand=newer_brand, owner=newer_owner),
+        )
+        connection.execute(
+            text(
+                "INSERT INTO provider_keys(id,brand_id,provider,is_active) "
+                "VALUES (:key,:brand,'openai',true)"
+            ),
+            dict(key=key, brand=newer_brand),
+        )
+    try:
+        first = store.submit(owner, older_brand, payload(), uuid4())
+        other = store.submit(str(newer_owner), newer_brand, payload(), uuid4())
+        store.submit(owner, older_brand, payload(), uuid4())
+        claimed = store.claim()
+        assert claimed["id"] == first["id"]
+        store.finish(claimed, error="PROVIDER_TIMEOUT")
+        # The older brand still has queued work, but the other brand waited longer.
+        assert store.claim()["id"] == other["id"]
+    finally:
+        with store.engine.begin() as connection:
+            for table, column in (
+                ("generations", "brand_id"),
+                ("provider_keys", "brand_id"),
+                ("brands", "id"),
+            ):
+                connection.execute(
+                    text(f"DELETE FROM {table} WHERE {column}=:brand"),
+                    dict(brand=newer_brand),
+                )
+
+
+def test_history_reads_do_not_wait_for_brand_row_locks(setup):
+    store, owner, brand = setup
+    row = store.submit(owner, brand, payload(), uuid4())
+    executor = ThreadPoolExecutor(2)
+    try:
+        # Leaving this block releases the row lock, so a regression fails with a
+        # timeout instead of hanging the executor shutdown below.
+        with store.engine.begin() as connection:
+            connection.execute(
+                text("SELECT 1 FROM brands WHERE id=:brand FOR UPDATE"),
+                dict(brand=brand),
+            )
+            listed = executor.submit(store.list, owner, brand, 1, 20)
+            detail = executor.submit(store.get, owner, brand, row["id"])
+            assert listed.result(timeout=5)[1] == 1
+            assert detail.result(timeout=5)["id"] == row["id"]
+    finally:
+        executor.shutdown(wait=True)
+    with pytest.raises(LookupError):
+        store.get(str(uuid4()), brand, row["id"])
+
+
 def test_processing_cannot_be_deleted_pending_can(setup):
     store, owner, brand = setup
     row = store.submit(owner, brand, payload(), uuid4())
@@ -457,3 +519,31 @@ def test_uncertain_upload_blocks_brand_deletion_and_late_publication(setup):
         asyncio.run(deletion.delete(owner, brand, "Test brand"))
     assert not store.usable(job)
     assert not store.finish(job, path=f"brands/{brand}/generations/{job['id']}.png")
+
+
+def test_busy_asset_lock_rejects_brand_deletion_without_fencing(setup):
+    from backend.app.services.brand_deletion import BrandDeletion
+    from backend.app.services.brand_store import (
+        BrandMutationInProgressError,
+        BrandStore,
+    )
+
+    store, owner, brand = setup
+
+    class Storage:
+        async def delete_brand_prefix(self, *_):
+            pytest.fail("Storage must not be touched while the lock is busy")
+
+    deletion = BrandDeletion(
+        store.engine, BrandStore(store.engine), Storage(), Storage()
+    )
+    with generation_asset_guard(store.engine, brand):
+        with pytest.raises(BrandMutationInProgressError):
+            asyncio.run(deletion.delete(owner, brand, "Test brand"))
+    with store.engine.connect() as connection:
+        state = connection.execute(
+            text("SELECT deletion_state FROM brands WHERE id=:brand"),
+            dict(brand=brand),
+        ).scalar_one()
+    # The brand was not fenced, so it is still usable and deletion can be retried.
+    assert state == "active"

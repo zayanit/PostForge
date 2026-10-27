@@ -273,14 +273,38 @@ test("uncertain submissions reuse their idempotency key on explicit retry", asyn
   await page.goto(`/brands/${BRAND}/generate`);
   await submit(page);
   await expect(
-    page.getByRole("alert").filter({ hasText: /fetch|request|submission/i })
+    page.getByRole("alert").filter({
+      hasText: "Submitting again is safe: it won’t create a duplicate image.",
+    })
   ).toBeVisible();
+  // The browser's raw fetch error text is never shown.
+  await expect(
+    page.getByText(/failed to fetch|load failed|networkerror/i)
+  ).toHaveCount(0);
   expect(state.requests).toHaveLength(1);
   await page
     .getByRole("button", { name: "Generate image", exact: true })
     .click();
   await expect(page.getByText("Queued", { exact: true })).toBeVisible();
   expect(state.requests[0]).toBe(state.requests[1]);
+});
+
+test("a submission failure message clears when the input changes", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  state.failOnce = true;
+  await page.goto(`/brands/${BRAND}/generate`);
+  await submit(page);
+  const message = page
+    .getByRole("alert")
+    .filter({ hasText: "Submitting again is safe" });
+  await expect(message).toBeVisible();
+  // getByLabel stops matching once the wrapping label contains typed text.
+  await page
+    .getByRole("textbox", { name: "Image prompt", exact: true })
+    .fill("A different garden product launch");
+  await expect(message).toHaveCount(0);
 });
 
 test("failure history is actionable and deletion can be retried", async ({
@@ -345,11 +369,56 @@ test("completed image links refresh before their signed URL expires", async ({
   state.generation!.image_url =
     "http://127.0.0.1:3011/fixture-image.png?token=first";
   await page.clock.fastForward(2100);
-  await expect(page.getByRole("img", { name: "A bright garden product launch", exact: true })).toHaveAttribute("src", /token=first/);
+  await expect(
+    page.getByRole("img", {
+      name: "A bright garden product launch",
+      exact: true,
+    })
+  ).toHaveAttribute("src", /token=first/);
   state.generation!.image_url =
     "http://127.0.0.1:3011/fixture-image.png?token=refreshed";
   await page.clock.fastForward(240100);
-  await expect(page.getByRole("img", { name: "A bright garden product launch", exact: true })).toHaveAttribute("src", /token=refreshed/);
+  await expect(
+    page.getByRole("img", {
+      name: "A bright garden product launch",
+      exact: true,
+    })
+  ).toHaveAttribute("src", /token=refreshed/);
+});
+
+test("history polls only in-progress items and reloads once when they finish", async ({
+  page,
+}) => {
+  await page.clock.install();
+  const state = await fixture(page);
+  await page.goto(`/brands/${BRAND}/generate`);
+  await submit(page);
+  await expect(page.getByText("Queued", { exact: true })).toBeVisible();
+  let listRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/generations"))
+      listRequests += 1;
+  });
+  await page.goto(`/brands/${BRAND}/history`);
+  await expect(
+    page.getByRole("article").getByText("Queued", { exact: true })
+  ).toBeVisible();
+  const initial = listRequests;
+  await page.clock.fastForward(2100);
+  await page.clock.fastForward(2100);
+  await page.clock.fastForward(2100);
+  expect(listRequests).toBe(initial);
+  state.generation!.status = "succeeded";
+  state.generation!.image_url =
+    "http://127.0.0.1:3011/fixture-image.png?token=done";
+  await page.clock.fastForward(2100);
+  await expect(
+    page.getByRole("img", {
+      name: "A bright garden product launch",
+      exact: true,
+    })
+  ).toHaveAttribute("src", /token=done/);
+  expect(listRequests).toBe(initial + 1);
 });
 
 test("unauthenticated generation access redirects to login", async ({

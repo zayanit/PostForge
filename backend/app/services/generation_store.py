@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
+from starlette.concurrency import run_in_threadpool
 
 from ..config import get_engine
 from ..models.generation import GenerateRequest
@@ -36,9 +37,40 @@ def generation_asset_guard(engine: Engine, brand_id: UUID):
         yield
 
 
+@asynccontextmanager
+async def generation_asset_guard_in_thread(engine: Engine, brand_id: UUID):
+    """Async form of generation_asset_guard that keeps its database calls off the
+    event loop. The guard's connection is only ever used by one thread at a time."""
+    guard = generation_asset_guard(engine, brand_id)
+    await run_in_threadpool(guard.__enter__)
+    try:
+        yield
+    except BaseException as exc:
+        if not await run_in_threadpool(
+            guard.__exit__, type(exc), exc, exc.__traceback__
+        ):
+            raise
+    else:
+        await run_in_threadpool(guard.__exit__, None, None, None)
+
+
 @dataclass(frozen=True)
 class GenerationStore:
     engine: Engine
+
+    @staticmethod
+    def require_owned_brand(connection: Connection, owner: str, brand_id: UUID):
+        """Ownership check for reads. Unlike BrandStore.lock_owned_brand it takes no
+        row lock, so history reads never contend with claims or mutations."""
+        owned = connection.execute(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM brands WHERE id=:brand AND "
+                "owner_user_id=:owner)"
+            ),
+            {"brand": brand_id, "owner": owner},
+        ).scalar_one()
+        if not owned:
+            raise LookupError("Brand not found.")
 
     def submit(
         self, owner: str, brand_id: UUID, payload: GenerateRequest, request_id: UUID
@@ -123,8 +155,8 @@ class GenerationStore:
         provider=None,
         status=None,
     ):
-        with self.engine.begin() as connection:
-            BrandStore.lock_owned_brand(connection, owner, brand_id)
+        with self.engine.connect() as connection:
+            self.require_owned_brand(connection, owner, brand_id)
             params = {
                 "brand": brand_id,
                 "limit": per_page,
@@ -154,8 +186,8 @@ class GenerationStore:
             return [dict(row) for row in rows], total
 
     def get(self, owner: str, brand_id: UUID, generation_id: UUID):
-        with self.engine.begin() as connection:
-            BrandStore.lock_owned_brand(connection, owner, brand_id)
+        with self.engine.connect() as connection:
+            self.require_owned_brand(connection, owner, brand_id)
             row = (
                 connection.execute(
                     text("SELECT * FROM generations WHERE brand_id=:brand AND id=:id"),
@@ -203,13 +235,17 @@ class GenerationStore:
             )
 
     def claim(self):
-        # Lock brands before jobs for submission, deletion, and claims.
+        # Lock brands before jobs for submission, deletion, and claims. Brands are
+        # ordered by their oldest claimable job so one busy brand cannot starve others.
         with self.engine.begin() as connection:
             candidate = connection.execute(text("""
                 SELECT b.id FROM brands b WHERE b.deletion_state='active' AND EXISTS
                 ( SELECT 1 FROM generations g WHERE g.brand_id=b.id AND NOT
                 g.cleanup_required AND (g.status='pending' OR (g.status='processing'
-                AND g.lease_expires_at < clock_timestamp())) ) ORDER BY b.created_at
+                AND g.lease_expires_at < clock_timestamp())) ) ORDER BY ( SELECT
+                min(g.created_at) FROM generations g WHERE g.brand_id=b.id AND NOT
+                g.cleanup_required AND (g.status='pending' OR (g.status='processing'
+                AND g.lease_expires_at < clock_timestamp())) ), b.id
                 FOR UPDATE OF b SKIP LOCKED LIMIT 1
             """)).scalar_one_or_none()
             if candidate is None:

@@ -21,7 +21,13 @@ addresses of the two in-container processes.
    `curl -s -o /dev/null -w '%{http_code}'`) — the check MUST verify the code falls in the
    `2xx` range itself, rather than relying only on `curl -f`'s default behavior, which
    treats any non-`4xx`/`5xx` response (including a redirect) as success.
-4. Exit code `0` (healthy) only if **both** requests return a `2xx` status, with the
+3a. Generation worker liveness (added by `007-image-generation`): the heartbeat file
+   (`GENERATION_WORKER_HEARTBEAT`, default `/tmp/postforge-worker-heartbeat`) must hold
+   a timestamp less than 60 seconds old. The worker writes it every 15 seconds from a
+   task that does not touch the database, so a database or Supabase outage does not
+   make the container unhealthy; only a dead or stalled worker process does.
+4. Exit code `0` (healthy) only if **both** requests return a `2xx` status and the
+   worker heartbeat is fresh, with the
    whole script (both requests combined) completing inside the shared 5-second
    `HEALTHCHECK --timeout` budget.
 5. Exit code `1` (unhealthy) if either request fails, times out (per-request `--max-time`

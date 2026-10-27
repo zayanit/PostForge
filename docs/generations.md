@@ -65,8 +65,12 @@ the OS temporary directory. Override it with `GENERATION_WORKER_HEARTBEAT` if ne
 
 The production container supervises all three processes, restarts a failed child,
 and checks the worker heartbeat along with the two HTTP services. Shutdown stops
-accepting new jobs and lets the current provider attempt finish; a forced shutdown
-leaves a recoverable processing record. Apply migrations before deploying the image.
+accepting new jobs and lets the current job finish, which takes up to about 4.5
+minutes. Docker's default stop timeout is only 10 seconds, so run the container with
+`--stop-timeout 300` (as `make up` and `docs/docker.md` do) and give hosting platforms
+an equal termination grace period. A forced shutdown leaves a recoverable processing
+record, but recovery cannot re-run the provider call, so that job ends as
+`GENERATION_INTERRUPTED` after the provider has charged for it. Apply migrations before deploying the image.
 If a release must be rolled back, retain the additive schema and stored images;
 do not deploy an old deletion implementation against brands with generated assets.
 
@@ -98,7 +102,10 @@ provides status filtering, preview, download, pagination, and confirmed deletion
 Brand context and the selected key ID are snapshotted at submission. The worker
 checks that the key is still usable before decrypting it. The provider uses standard
 square/landscape/portrait sizes; Pillow center-crops and resizes to exact product
-dimensions, then writes PNG. The integration follows the
+dimensions, then writes PNG. Because wide and tall presets lose part of the canvas
+(a LinkedIn Banner keeps only the middle 37% of the height), the prompt ends with a
+composition note naming the final size and the share of the canvas that survives the
+crop (`composition_guidance()` in `backend/app/presets.py`). The integration follows the
 [official OpenAI Images API](https://developers.openai.com/api/reference/resources/images/methods/generate),
 including PNG output and omission of the unsupported legacy `response_format` field.
 

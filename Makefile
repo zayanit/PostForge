@@ -17,6 +17,9 @@ CONTAINER_NAME ?= postforge
 PLATFORM       ?= linux/amd64
 HOST_PORT      ?= 3000
 ENV_FILE       ?= .env.docker
+# Seconds `docker stop` waits before SIGKILL. The worker finishes its current job on
+# SIGTERM: up to 180s provider call + 60s asset-lock wait + 30s upload, plus margin.
+STOP_TIMEOUT   ?= 300
 
 FRONTEND_DIR := frontend
 BACKEND_DIR  := backend
@@ -57,6 +60,7 @@ up: build ## Build (if needed) and start the container in the background
 	-docker rm -f $(CONTAINER_NAME) >/dev/null 2>&1
 	docker run -d --name $(CONTAINER_NAME) --platform $(PLATFORM) \
 		--env-file $(ENV_FILE) \
+		--stop-timeout $(STOP_TIMEOUT) \
 		-p $(HOST_PORT):3000 \
 		$(IMAGE_NAME)
 	@echo "Started: http://localhost:$(HOST_PORT)  (make logs / make health to check on it)"

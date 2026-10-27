@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from functools import lru_cache
 from uuid import UUID
@@ -10,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from ..config import get_engine
 from .brand_storage import BrandStorage, BrandStorageError, get_brand_storage
-from .brand_store import BrandStore, get_brand_store
+from .brand_store import BrandMutationInProgressError, BrandStore, get_brand_store
 from .generation_storage import GenerationStorage, get_generation_storage
 from .generation_store import GenerationConflict, generation_asset_guard
 
@@ -34,11 +35,14 @@ class BrandDeletion:
 
     async def delete(self, user_id: str, brand_id: UUID, confirm_name: str) -> None:
         self.brand_store.get_brand(user_id, brand_id)
-        try:
-            with generation_asset_guard(self.engine, brand_id):
-                await self._delete_guarded(user_id, brand_id, confirm_name)
-        except GenerationConflict as exc:
-            raise BrandDeletionCleanupError from exc
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(generation_asset_guard(self.engine, brand_id))
+            except GenerationConflict as exc:
+                # A generation is being saved or deleted. Nothing has been fenced
+                # yet, so this is a retryable busy state, not an incomplete cleanup.
+                raise BrandMutationInProgressError from exc
+            await self._delete_guarded(user_id, brand_id, confirm_name)
 
     async def _delete_guarded(
         self, user_id: str, brand_id: UUID, confirm_name: str

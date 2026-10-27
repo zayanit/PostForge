@@ -5,7 +5,9 @@ import json
 
 import httpx
 import pytest
-from backend.app.presets import PRESETS, provider_size
+import re
+
+from backend.app.presets import PRESETS, composition_guidance, provider_size
 from backend.app.services.image_generation import (
     GenerationFailure,
     generate_openai,
@@ -38,6 +40,67 @@ def test_square_crop_keeps_center_not_edges():
     with Image.open(io.BytesIO(process_image(image_bytes(), 20, 20))) as image:
         assert image.getpixel((1, 10)) == (0, 255, 0)
         assert image.getpixel((18, 10)) == (0, 255, 0)
+
+
+@pytest.mark.parametrize("preset", PRESETS)
+def test_composition_guidance_matches_the_actual_crop(preset):
+    """Content inside the band the prompt describes must survive the crop, and
+    the band must not be much smaller than what is actually kept."""
+    width, height, _ = PRESETS[preset]
+    guidance = composition_guidance(width, height)
+    canvas_width, canvas_height = map(int, provider_size(width, height).split("x"))
+    canvas = Image.new("RGB", (canvas_width, canvas_height), (255, 0, 0))
+    match = re.search(r"middle (\d+)% of the image (width|height)", guidance)
+    if match is None:
+        assert "whole image is used" in guidance
+        band = (0, 0, canvas_width, canvas_height)
+    else:
+        share, axis = int(match[1]) / 100, match[2]
+        if axis == "height":
+            margin = round(canvas_height * (1 - share) / 2)
+            band = (0, margin, canvas_width, canvas_height - margin)
+        else:
+            margin = round(canvas_width * (1 - share) / 2)
+            band = (margin, 0, canvas_width - margin, canvas_height)
+    canvas.paste((0, 255, 0), band)
+    # Blue markers just inside both band edges must survive (band not overstated).
+    left, top, right, bottom = band
+    if match is not None and match[2] == "height":
+        markers = [(left, top, right, top + 6), (left, bottom - 6, right, bottom)]
+    else:
+        markers = [(left, top, left + 6, bottom), (right - 6, top, right, bottom)]
+    for marker in markers:
+        canvas.paste((0, 0, 255), marker)
+    buffer = io.BytesIO()
+    canvas.save(buffer, "PNG")
+    with Image.open(io.BytesIO(process_image(buffer.getvalue(), width, height))) as out:
+        # Little red survives (band not understated)...
+        red = sum(1 for r, g, b in out.getdata() if r > max(g, b))
+        assert red / (width * height) < 0.02
+        # ...and both edge markers are still present.
+        edge = 0.05
+        if match is not None and match[2] == "height":
+            first = out.crop((0, 0, width, int(height * edge)))
+            last = out.crop((0, int(height * (1 - edge)), width, height))
+        else:
+            first = out.crop((0, 0, int(width * edge), height))
+            last = out.crop((int(width * (1 - edge)), 0, width, height))
+        for region in (first, last):
+            assert any(b > max(r, g) for r, g, b in region.getdata())
+
+
+def test_provider_prompt_includes_composition_guidance():
+    def handler(request):
+        prompt = json.loads(request.content)["prompt"]
+        assert composition_guidance(1584, 396) in prompt
+        assert "middle 37% of the image height" in prompt
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(image_bytes()).decode()}]},
+        )
+
+    banner = {**job(), "width": 1584, "height": 396}
+    asyncio.run(generate_openai(banner, "secret", httpx.MockTransport(handler)))
 
 
 @pytest.mark.parametrize("data", [b"not an image", b"", b"\x89PNG\r\n"])

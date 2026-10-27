@@ -213,3 +213,47 @@ def test_unauthenticated_requests_are_rejected(client):
     api, _, _ = client
     app.dependency_overrides.pop(get_current_user)
     assert api.get(f"/api/v1/brands/{BRAND}/generations").status_code == 401
+
+
+def test_database_calls_do_not_block_the_event_loop():
+    import asyncio
+    import threading
+
+    import httpx
+
+    release = threading.Event()
+    order = []
+
+    class BlockingStore(Store):
+        def list(self, *args):
+            # Holds the call until /health has been served; on the event loop this
+            # would deadlock until the timeout.
+            release.wait(timeout=5)
+            order.append("list")
+            return [], 0
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(OWNER)
+    app.dependency_overrides[get_generation_store] = BlockingStore
+    app.dependency_overrides[get_generation_storage] = Storage
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as api:
+            history = asyncio.create_task(
+                api.get(f"/api/v1/brands/{BRAND}/generations")
+            )
+            await asyncio.sleep(0.1)
+            health = await asyncio.wait_for(api.get("/health"), timeout=2)
+            order.append("health")
+            release.set()
+            return health, await history
+
+    try:
+        health, history = asyncio.run(scenario())
+    finally:
+        app.dependency_overrides.clear()
+    assert health.status_code == 200
+    assert history.status_code == 200
+    assert order == ["health", "list"]

@@ -7,11 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 PostForge is a multi-brand SaaS for generating social-media images (BYOK — users
 supply their own OpenAI/Gemini API keys). The full product design lives in
 `docs/implementation-plan.md` (schema, API surface, generation pipeline, frontend
-structure, build order across 8 phases). **Phase 1 (auth/profile), Phase 2
-(Dockerization), and Phase 3 (Brand CRUD) are implemented so far** — brand kits,
-provider keys, and image generation itself (Phases 4–7) do not exist in code yet.
-Don't assume routes, tables, or UI from the implementation plan exist until you've
-checked.
+structure, build order across 8 phases). **Phases 1–5 (auth/profile,
+Dockerization, Brand CRUD, provider keys, Brand Kit) are implemented, and Phases 6–7
+are implemented as an OpenAI-only first release** (`specs/007-image-generation/`):
+durable generation jobs run by a separate worker process, private PNG storage, and
+history. Gemini generation, logo processing, and Phase 8 (admin) do not exist in code
+yet. Don't assume routes, tables, or UI from the implementation plan exist until
+you've checked.
 
 The authoritative product rules are in `.specify/memory/constitution.md`, not this
 file — read it before making architectural decisions. Key non-negotiables from it:
@@ -118,8 +120,10 @@ no DB/external calls) and `127.0.0.1:3000/login` (frontend — note: *not* `/`, 
 is behind the auth-guard middleware and would redirect; `/login` is the actual public
 route). Both checks require an explicit `2xx` with redirects disabled
 (`--max-redirs 0`) — `curl -f` alone isn't enough since it treats redirects as
-success. Health reflects only these two local processes; it deliberately never
-calls Supabase, so a Supabase outage doesn't flap container health.
+success. It also requires the generation worker's heartbeat file to be under 60s
+old. Health reflects only these local processes; it deliberately never calls
+Supabase, so a Supabase outage doesn't flap container health — the worker writes
+its heartbeat from a task that never touches the database, so keep it that way.
 
 Full behavioral contracts: `specs/002-dockerization/contracts/entrypoint.md` and
 `.../healthcheck.md`. Operational runbook (build/run/deploy/troubleshoot):
@@ -157,7 +161,7 @@ supabase migration up   # apply new migrations under supabase/migrations/
 **Docker**:
 ```bash
 docker build --platform linux/amd64 -t postforge:local .
-docker run -d --name postforge --platform linux/amd64 --env-file .env.docker -p 3000:3000 postforge:local
+docker run -d --name postforge --platform linux/amd64 --env-file .env.docker --stop-timeout 300 -p 3000:3000 postforge:local
 ```
 See `docs/docker.md` for the full required env var list and `specs/002-dockerization/quickstart.md`
 for end-to-end validation scenarios (including a deterministic crash-restart test using
