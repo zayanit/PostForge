@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import GenerationResult from "@/components/generation-result";
 import {
   activeGeneration,
+  GenerationNetworkError,
   generationApi,
   type Generation,
   type History,
@@ -137,9 +138,11 @@ export default function GeneratePage() {
       );
     } catch (cause) {
       setError(
-        cause instanceof Error
-          ? cause.message
-          : "Submission failed. You can safely retry the same submission."
+        cause instanceof GenerationNetworkError
+          ? "We couldn’t confirm your submission. Submitting again is safe: it won’t create a duplicate image."
+          : cause instanceof Error
+            ? cause.message
+            : "Submission failed. You can safely retry the same submission."
       );
     } finally {
       setSubmitting(false);

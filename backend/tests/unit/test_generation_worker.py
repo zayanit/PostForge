@@ -1,4 +1,5 @@
 import asyncio
+import json
 from contextlib import nullcontext
 from uuid import uuid4
 
@@ -200,3 +201,76 @@ def test_sigterm_finishes_the_current_job_and_claims_no_more(monkeypatch, tmp_pa
 
     asyncio.run(asyncio.wait_for(worker.run_worker(), timeout=5))
     assert events == ["claim", "finished"]
+
+
+def _run_one(monkeypatch, tmp_path, outcome_or_error):
+    """Run the worker loop for exactly one claimed job, then stop."""
+    import logging
+
+    from backend.app.log import JsonLogFormatter
+
+    claimed = {**job(), "lease_token": uuid4()}
+
+    class OneJobStore:
+        calls = 0
+
+        def claim(self):
+            self.calls += 1
+            if self.calls > 1:
+                raise asyncio.CancelledError
+            return claimed
+
+        def heartbeat(self, _job):
+            return True
+
+    async def fake_process(*_):
+        if isinstance(outcome_or_error, Exception):
+            raise outcome_or_error
+        return outcome_or_error
+
+    records = []
+    handler = logging.Handler()
+    handler.emit = lambda record: records.append(JsonLogFormatter().format(record))
+    worker.logger.addHandler(handler)
+    monkeypatch.setattr(worker, "HEARTBEAT_FILE", tmp_path / "heartbeat")
+    monkeypatch.setattr(worker, "assert_database_role_privileges", lambda: None)
+    monkeypatch.setattr(worker, "get_generation_store", OneJobStore)
+    monkeypatch.setattr(worker, "get_generation_storage", Storage)
+    monkeypatch.setattr(worker, "process_job", fake_process)
+    monkeypatch.setattr(worker.asyncio, "sleep", _fast_sleep)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(worker.run_worker())
+    finally:
+        worker.logger.removeHandler(handler)
+    return claimed, [json.loads(line) for line in records]
+
+
+_real_sleep = asyncio.sleep
+
+
+async def _fast_sleep(_seconds):
+    await _real_sleep(0)
+
+
+def test_job_outcome_is_logged_with_identifiers_and_code(monkeypatch, tmp_path):
+    claimed, logs = _run_one(
+        monkeypatch, tmp_path, {"outcome": "failed", "code": "PROVIDER_TIMEOUT"}
+    )
+    finished = next(e for e in logs if e.get("event") == "generation.job_finished")
+    assert finished["level"] == "WARNING"
+    assert finished["outcome"] == "failed"
+    assert finished["code"] == "PROVIDER_TIMEOUT"
+    assert finished["generation_id"] == str(claimed["id"])
+    assert finished["brand_id"] == str(claimed["brand_id"])
+    assert isinstance(finished["duration_ms"], int)
+
+
+def test_unexpected_error_logs_class_name_but_never_its_text(monkeypatch, tmp_path):
+    claimed, logs = _run_one(
+        monkeypatch, tmp_path, RuntimeError("sk-secret-key and a signed URL")
+    )
+    error = next(e for e in logs if e.get("event") == "generation.worker_error")
+    assert error["error_type"] == "RuntimeError"
+    assert error["generation_id"] == str(claimed["id"])
+    assert "sk-secret" not in json.dumps(logs)

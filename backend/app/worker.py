@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import assert_database_role_privileges
+from .log import configure_logging
 from .services.brand_storage import BrandStorageError
 from .services.generation_storage import get_generation_storage
 from .services.generation_store import (
@@ -51,43 +52,58 @@ async def wait_for_asset_guard(engine, brand_id):
             return
 
 
-async def process_job(store, storage, job, generate=generate_openai):
+async def process_job(store, storage, job, generate=generate_openai) -> dict:
+    """Process one claimed job and describe what happened, for logging."""
     path = storage.path(job["brand_id"], job["id"])
     if job["recovery"]:
         async with wait_for_asset_guard(store.engine, job["brand_id"]):
             if not store.usable(job):
-                return
+                return {"outcome": "lease_lost"}
             # Respect a previous upload's uncertainty window even if its worker
             # lease expired early. Do not turn an in-flight write into a failed row.
             if job.get("upload_fence_until") is not None:
                 if job["upload_fence_until"] > datetime.now(UTC):
-                    return
+                    return {"outcome": "upload_pending"}
             if await storage.object_exists(path):
-                store.finish(job, path=path)
-            else:
-                store.finish(job, error="GENERATION_INTERRUPTED")
-        return
+                published = store.finish(job, path=path)
+                return {"outcome": "recovered" if published else "lease_lost"}
+            if not store.finish(job, error="GENERATION_INTERRUPTED"):
+                return {"outcome": "lease_lost"}
+            return {"outcome": "failed", "code": "GENERATION_INTERRUPTED"}
     error = None
     try:
         key = store.credential(job)
         if not key:
             raise GenerationFailure("OPENAI_KEY_REQUIRED")
         if not store.usable(job):
-            return
+            return {"outcome": "lease_lost"}
         data, request_id = await generate(job, key)
         key = None
         async with wait_for_asset_guard(store.engine, job["brand_id"]):
             if not store.usable(job) or not store.begin_upload(job):
-                return
+                return {"outcome": "lease_lost"}
             # An uncertain upload remains processing for lease-based reconciliation.
             await storage.upload(path, data)
-            store.finish(job, path=path, provider_request_id=request_id)
+            if not store.finish(job, path=path, provider_request_id=request_id):
+                return {"outcome": "lease_lost"}
+            return {"outcome": "succeeded", "provider_request_id": request_id}
     except GenerationFailure as exc:
         error = exc.code
-    except (BrandStorageError, GenerationConflict):
-        return
-    if error:
-        store.finish(job, error=error)
+    except BrandStorageError:
+        return {"outcome": "upload_uncertain"}
+    except GenerationConflict:
+        return {"outcome": "asset_busy"}
+    if not store.finish(job, error=error):
+        return {"outcome": "lease_lost"}
+    return {"outcome": "failed", "code": error}
+
+
+def _log(level, event, job=None, **fields):
+    if job is not None:
+        fields.update(
+            generation_id=job["id"], brand_id=job["brand_id"], recovery=job["recovery"]
+        )
+    logger.log(level, event, extra={"event": event, **fields})
 
 
 async def run_worker():
@@ -107,8 +123,12 @@ async def run_worker():
         while True:
             try:
                 HEARTBEAT_FILE.write_text(str(time.time()))
-            except OSError:
-                logger.error("generation.worker_error")
+            except OSError as exc:
+                _log(
+                    logging.ERROR,
+                    "generation.heartbeat_write_failed",
+                    error_type=type(exc).__name__,
+                )
             await asyncio.sleep(HEARTBEAT_SECONDS)
 
     async def lease_heartbeat(job):
@@ -117,24 +137,47 @@ async def run_worker():
             try:
                 if not store.heartbeat(job):
                     return
-            except Exception:
+            except Exception as exc:
                 # A transient database error must not end lease renewal.
-                logger.error("generation.worker_error")
+                _log(
+                    logging.WARNING,
+                    "generation.lease_renewal_failed",
+                    job,
+                    error_type=type(exc).__name__,
+                )
 
+    _log(logging.INFO, "generation.worker_started")
     alive = asyncio.create_task(liveness())
     try:
         while not stop.is_set():
             pulse = None
+            job = None
             try:
                 job = store.claim()
                 if job:
                     pulse = asyncio.create_task(lease_heartbeat(job))
-                    await process_job(store, storage, job)
+                    started = time.monotonic()
+                    result = await process_job(store, storage, job)
+                    _log(
+                        logging.WARNING
+                        if result["outcome"] == "failed"
+                        else logging.INFO,
+                        "generation.job_finished",
+                        job,
+                        duration_ms=round((time.monotonic() - started) * 1000),
+                        **result,
+                    )
                 else:
                     await asyncio.sleep(2)
-            except Exception:
-                # Exceptions may contain credentials, prompts, SQL, or signed URLs.
-                logger.error("generation.worker_error")
+            except Exception as exc:
+                # Log only the class name: exception text may contain credentials,
+                # prompts, SQL, or signed URLs.
+                _log(
+                    logging.ERROR,
+                    "generation.worker_error",
+                    job,
+                    error_type=type(exc).__name__,
+                )
                 await asyncio.sleep(2)
             finally:
                 if pulse:
@@ -146,17 +189,16 @@ async def run_worker():
         with suppress(asyncio.CancelledError):
             await alive
         HEARTBEAT_FILE.unlink(missing_ok=True)
+        _log(logging.INFO, "generation.worker_stopped")
 
 
 if __name__ == "__main__":
-    # Fixed log text also keeps unexpected SQL/storage exceptions out of logs.
-    logging.basicConfig(
-        format='{"event":"generation.worker_error","level":"%(levelname)s"}'
-    )
+    # The allowlist formatter keeps exception text out of logs.
+    configure_logging()
     try:
         asyncio.run(run_worker())
     except KeyboardInterrupt:
         pass
-    except Exception:
-        logger.error("generation.worker_error")
+    except Exception as exc:
+        _log(logging.ERROR, "generation.worker_fatal", error_type=type(exc).__name__)
         raise SystemExit(1) from None

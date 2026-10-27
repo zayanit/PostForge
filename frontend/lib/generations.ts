@@ -61,6 +61,14 @@ const MESSAGES: Record<string, string> = {
   UNAUTHORIZED: "Your session has expired. Sign in again.",
 };
 
+// fetch() rejects with browser-specific text ("Failed to fetch", "Load failed",
+// "NetworkError when attempting to fetch resource."), so it is never shown as-is.
+export class GenerationNetworkError extends Error {
+  constructor() {
+    super("Couldn’t reach PostForge. Check your connection and try again.");
+  }
+}
+
 export function generationMessage(code: string | null) {
   return (
     MESSAGES[code ?? ""] ??
@@ -74,23 +82,33 @@ export async function generationApi<T>(
 ): Promise<T> {
   const { data } = await supabase.auth.getSession();
   if (!data.session) throw new Error(MESSAGES.UNAUTHORIZED);
-  const response = await fetch(
-    `${getPublicEnv("NEXT_PUBLIC_API_URL")}/v1/brands${path}`,
-    {
-      ...init,
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${data.session.access_token}`,
-        ...init.headers,
-      },
-    }
-  );
+  let response: Response;
+  try {
+    response = await fetch(
+      `${getPublicEnv("NEXT_PUBLIC_API_URL")}/v1/brands${path}`,
+      {
+        ...init,
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${data.session.access_token}`,
+          ...init.headers,
+        },
+      }
+    );
+  } catch {
+    throw new GenerationNetworkError();
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new Error(generationMessage(body?.error?.code));
   }
-  return response.status === 204 ? (undefined as T) : response.json();
+  if (response.status === 204) return undefined as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new Error(generationMessage(null));
+  }
 }
 
 export async function downloadGeneration(
@@ -102,9 +120,15 @@ export async function downloadGeneration(
   );
   if (!generation.image_url)
     throw new Error("This image is not available for download.");
-  const response = await fetch(generation.image_url, { cache: "no-store" });
-  if (!response.ok) throw new Error("Download failed. Please try again.");
-  const url = URL.createObjectURL(await response.blob());
+  let blob: Blob;
+  try {
+    const response = await fetch(generation.image_url, { cache: "no-store" });
+    if (!response.ok) throw new Error();
+    blob = await response.blob();
+  } catch {
+    throw new Error("Download failed. Please try again.");
+  }
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = `postforge-${generation.platform_preset}-${generation.id}.png`;

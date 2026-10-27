@@ -273,8 +273,14 @@ test("uncertain submissions reuse their idempotency key on explicit retry", asyn
   await page.goto(`/brands/${BRAND}/generate`);
   await submit(page);
   await expect(
-    page.getByRole("alert").filter({ hasText: /fetch|request|submission/i })
+    page.getByRole("alert").filter({
+      hasText: "Submitting again is safe: it won’t create a duplicate image.",
+    })
   ).toBeVisible();
+  // The browser's raw fetch error text is never shown.
+  await expect(
+    page.getByText(/failed to fetch|load failed|networkerror/i)
+  ).toHaveCount(0);
   expect(state.requests).toHaveLength(1);
   await page
     .getByRole("button", { name: "Generate image", exact: true })

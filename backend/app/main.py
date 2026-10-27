@@ -1,5 +1,3 @@
-import json
-import logging
 import re
 import time
 from collections.abc import AsyncIterator, Callable
@@ -13,6 +11,8 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import assert_database_role_privileges, load_settings
+from .log import JsonLogFormatter as _JsonLogFormatter  # noqa: F401 (tests use it)
+from .log import configure_logging as _configure_logging
 from .routes.auth import router as auth_router
 from .routes.brand_kits import router as brand_kits_router
 from .routes.brands import router as brands_router
@@ -32,34 +32,6 @@ _SAFE_ERROR_MESSAGES = {
     (503, "KEY_CLEANUP_REQUIRED"): "Key cleanup did not complete. Retry deletion.",
     (503, "BRAND_CLEANUP_REQUIRED"): "Brand cleanup did not complete. Retry deletion.",
 }
-
-
-class _JsonLogFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {
-            "level": record.levelname,
-            "logger": record.name,
-        }
-        for key in (
-            "event",
-            "request_id",
-            "provider",
-            "code",
-            "duration_ms",
-            "provider_request_id",
-        ):
-            value = getattr(record, key, None)
-            if value is not None:
-                payload[key] = value
-        return json.dumps(payload)
-
-
-def _configure_logging() -> None:
-    handler = logging.StreamHandler()
-    handler.setFormatter(_JsonLogFormatter())
-    root = logging.getLogger()
-    root.handlers = [handler]
-    root.setLevel(logging.INFO)
 
 
 @asynccontextmanager

@@ -374,20 +374,34 @@ export default function BrandDetailPage() {
       </div>
 
       <div className="rounded-2xl border p-8">
-          <h2 className="text-lg font-semibold">Generate and explore</h2>
-          <p className="mt-1 text-sm text-gray-600">Create social images with your brand context and OpenAI key.</p>
-          {cleanupRequired || isDeleting ? (
-            <p className="mt-5 text-sm text-amber-800">Generation is unavailable while brand cleanup is in progress.</p>
-          ) : (
-            <nav className="mt-5 flex flex-wrap gap-3">
-              <Link className="rounded-md bg-black px-4 py-2 text-sm text-white" href={`/brands/${brand.id}/generate`}>Generate an image</Link>
-              <Link className="rounded-md border px-4 py-2 text-sm" href={`/brands/${brand.id}/history`}>Image history</Link>
-            </nav>
-          )}
-        </div>
+        <h2 className="text-lg font-semibold">Generate and explore</h2>
+        <p className="mt-1 text-sm text-gray-600">
+          Create social images with your brand context and OpenAI key.
+        </p>
+        {cleanupRequired || isDeleting ? (
+          <p className="mt-5 text-sm font-medium text-amber-800">
+            Generation is unavailable while brand cleanup is in progress.
+          </p>
+        ) : (
+          <nav className="mt-5 flex flex-wrap gap-3">
+            <Link
+              className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white"
+              href={`/brands/${brand.id}/generate`}
+            >
+              Generate an image
+            </Link>
+            <Link
+              className="rounded-md border px-4 py-2 text-sm font-medium hover:border-gray-400"
+              href={`/brands/${brand.id}/history`}
+            >
+              Image history
+            </Link>
+          </nav>
+        )}
+      </div>
 
-        <div className="rounded-2xl border p-8">
-          <h2 className="text-lg font-semibold">Provider keys</h2>
+      <div className="rounded-2xl border p-8">
+        <h2 className="text-lg font-semibold">Provider keys</h2>
         <p className="mt-1 text-sm text-gray-600">
           Configure brand-scoped OpenAI and Gemini credentials without exposing them after submission.
         </p>

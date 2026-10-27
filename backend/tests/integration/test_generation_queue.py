@@ -519,3 +519,31 @@ def test_uncertain_upload_blocks_brand_deletion_and_late_publication(setup):
         asyncio.run(deletion.delete(owner, brand, "Test brand"))
     assert not store.usable(job)
     assert not store.finish(job, path=f"brands/{brand}/generations/{job['id']}.png")
+
+
+def test_busy_asset_lock_rejects_brand_deletion_without_fencing(setup):
+    from backend.app.services.brand_deletion import BrandDeletion
+    from backend.app.services.brand_store import (
+        BrandMutationInProgressError,
+        BrandStore,
+    )
+
+    store, owner, brand = setup
+
+    class Storage:
+        async def delete_brand_prefix(self, *_):
+            pytest.fail("Storage must not be touched while the lock is busy")
+
+    deletion = BrandDeletion(
+        store.engine, BrandStore(store.engine), Storage(), Storage()
+    )
+    with generation_asset_guard(store.engine, brand):
+        with pytest.raises(BrandMutationInProgressError):
+            asyncio.run(deletion.delete(owner, brand, "Test brand"))
+    with store.engine.connect() as connection:
+        state = connection.execute(
+            text("SELECT deletion_state FROM brands WHERE id=:brand"),
+            dict(brand=brand),
+        ).scalar_one()
+    # The brand was not fenced, so it is still usable and deletion can be retried.
+    assert state == "active"
