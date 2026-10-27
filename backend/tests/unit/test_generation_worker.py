@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from backend.app import worker
 from backend.app.services.brand_storage import BrandStorageUnknownError
+from backend.app.services.generation_store import GenerationConflict
 
 
 class Store:
@@ -105,3 +106,68 @@ def test_revoked_key_prevents_provider_call():
 
     asyncio.run(worker.process_job(store, storage, job(), provider))
     assert store.results == [{"error": "OPENAI_KEY_REQUIRED"}]
+
+
+def test_busy_asset_guard_is_awaited_instead_of_discarding_the_image(monkeypatch):
+    store, storage = Store(), Storage()
+    attempts = []
+
+    def busy_then_free(*_):
+        attempts.append(None)
+        if len(attempts) < 3:
+            raise GenerationConflict("GENERATION_ASSET_BUSY")
+        return nullcontext()
+
+    monkeypatch.setattr(worker, "generation_asset_guard", busy_then_free)
+    monkeypatch.setattr(worker, "GUARD_RETRY_SECONDS", 0)
+
+    async def provider(*_):
+        return b"PNG", "request-id"
+
+    asyncio.run(worker.process_job(store, storage, job(), provider))
+    assert len(attempts) == 3
+    assert storage.uploads == 1
+    assert store.results[0]["path"]
+
+
+def test_persistently_busy_asset_guard_leaves_job_for_reconciliation(monkeypatch):
+    store, storage = Store(), Storage()
+
+    def always_busy(*_):
+        raise GenerationConflict("GENERATION_ASSET_BUSY")
+
+    monkeypatch.setattr(worker, "generation_asset_guard", always_busy)
+    monkeypatch.setattr(worker, "GUARD_ATTEMPTS", 3)
+    monkeypatch.setattr(worker, "GUARD_RETRY_SECONDS", 0)
+
+    async def provider(*_):
+        return b"PNG", "request-id"
+
+    asyncio.run(worker.process_job(store, storage, job(), provider))
+    assert storage.uploads == 0
+    assert not store.results
+
+
+def test_liveness_heartbeat_does_not_depend_on_the_database(monkeypatch, tmp_path):
+    heartbeat = tmp_path / "heartbeat"
+
+    class UnreachableStore:
+        def claim(self):
+            raise OSError("database unavailable")
+
+    monkeypatch.setattr(worker, "HEARTBEAT_FILE", heartbeat)
+    monkeypatch.setattr(worker, "assert_database_role_privileges", lambda: None)
+    monkeypatch.setattr(worker, "get_generation_store", UnreachableStore)
+    monkeypatch.setattr(worker, "get_generation_storage", Storage)
+
+    async def scenario():
+        task = asyncio.create_task(worker.run_worker())
+        await asyncio.sleep(0.1)
+        written = heartbeat.exists()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return written
+
+    assert asyncio.run(scenario())
+    assert not heartbeat.exists()

@@ -8,7 +8,7 @@ import os
 import signal
 import tempfile
 import time
-from contextlib import suppress
+from contextlib import ExitStack, asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,6 +23,11 @@ from .services.generation_store import (
 from .services.image_generation import GenerationFailure, generate_openai
 
 logger = logging.getLogger(__name__)
+HEARTBEAT_SECONDS = 15
+# Wait up to a minute for a brand's asset lock (held briefly by user deletions,
+# other workers' uploads, or brand cleanup) instead of discarding a paid image.
+GUARD_ATTEMPTS = 120
+GUARD_RETRY_SECONDS = 0.5
 HEARTBEAT_FILE = Path(
     os.getenv(
         "GENERATION_WORKER_HEARTBEAT",
@@ -31,10 +36,25 @@ HEARTBEAT_FILE = Path(
 )
 
 
+@asynccontextmanager
+async def wait_for_asset_guard(engine, brand_id):
+    for attempt in range(GUARD_ATTEMPTS):
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(generation_asset_guard(engine, brand_id))
+            except GenerationConflict:
+                if attempt + 1 == GUARD_ATTEMPTS:
+                    raise
+                await asyncio.sleep(GUARD_RETRY_SECONDS)
+                continue
+            yield
+            return
+
+
 async def process_job(store, storage, job, generate=generate_openai):
     path = storage.path(job["brand_id"], job["id"])
     if job["recovery"]:
-        with generation_asset_guard(store.engine, job["brand_id"]):
+        async with wait_for_asset_guard(store.engine, job["brand_id"]):
             if not store.usable(job):
                 return
             # Respect a previous upload's uncertainty window even if its worker
@@ -56,7 +76,7 @@ async def process_job(store, storage, job, generate=generate_openai):
             return
         data, request_id = await generate(job, key)
         key = None
-        with generation_asset_guard(store.engine, job["brand_id"]):
+        async with wait_for_asset_guard(store.engine, job["brand_id"]):
             if not store.usable(job) or not store.begin_upload(job):
                 return
             # An uncertain upload remains processing for lease-based reconciliation.
@@ -81,33 +101,51 @@ async def run_worker():
         except NotImplementedError:
             signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop.set))
 
-    async def heartbeat(job):
+    # Process liveness is independent of the database so that a database outage
+    # does not make the container unhealthy (see the healthcheck contract).
+    async def liveness():
         while True:
-            HEARTBEAT_FILE.write_text(str(time.time()))
-            if job is not None and not store.heartbeat(job):
-                return
-            await asyncio.sleep(15)
+            try:
+                HEARTBEAT_FILE.write_text(str(time.time()))
+            except OSError:
+                logger.error("generation.worker_error")
+            await asyncio.sleep(HEARTBEAT_SECONDS)
 
-    while not stop.is_set():
-        job = None
-        pulse = None
-        try:
-            job = store.claim()
-            pulse = asyncio.create_task(heartbeat(job))
-            if job:
-                await process_job(store, storage, job)
-            else:
+    async def lease_heartbeat(job):
+        while True:
+            await asyncio.sleep(HEARTBEAT_SECONDS)
+            try:
+                if not store.heartbeat(job):
+                    return
+            except Exception:
+                # A transient database error must not end lease renewal.
+                logger.error("generation.worker_error")
+
+    alive = asyncio.create_task(liveness())
+    try:
+        while not stop.is_set():
+            pulse = None
+            try:
+                job = store.claim()
+                if job:
+                    pulse = asyncio.create_task(lease_heartbeat(job))
+                    await process_job(store, storage, job)
+                else:
+                    await asyncio.sleep(2)
+            except Exception:
+                # Exceptions may contain credentials, prompts, SQL, or signed URLs.
+                logger.error("generation.worker_error")
                 await asyncio.sleep(2)
-        except Exception:
-            # Exceptions may contain credentials, prompts, SQL, or signed URLs.
-            logger.error("generation.worker_error")
-            await asyncio.sleep(2)
-        finally:
-            if pulse:
-                pulse.cancel()
-                with suppress(asyncio.CancelledError, Exception):
-                    await pulse
-    HEARTBEAT_FILE.unlink(missing_ok=True)
+            finally:
+                if pulse:
+                    pulse.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await pulse
+    finally:
+        alive.cancel()
+        with suppress(asyncio.CancelledError):
+            await alive
+        HEARTBEAT_FILE.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

@@ -345,11 +345,56 @@ test("completed image links refresh before their signed URL expires", async ({
   state.generation!.image_url =
     "http://127.0.0.1:3011/fixture-image.png?token=first";
   await page.clock.fastForward(2100);
-  await expect(page.getByRole("img", { name: "A bright garden product launch", exact: true })).toHaveAttribute("src", /token=first/);
+  await expect(
+    page.getByRole("img", {
+      name: "A bright garden product launch",
+      exact: true,
+    })
+  ).toHaveAttribute("src", /token=first/);
   state.generation!.image_url =
     "http://127.0.0.1:3011/fixture-image.png?token=refreshed";
   await page.clock.fastForward(240100);
-  await expect(page.getByRole("img", { name: "A bright garden product launch", exact: true })).toHaveAttribute("src", /token=refreshed/);
+  await expect(
+    page.getByRole("img", {
+      name: "A bright garden product launch",
+      exact: true,
+    })
+  ).toHaveAttribute("src", /token=refreshed/);
+});
+
+test("history polls only in-progress items and reloads once when they finish", async ({
+  page,
+}) => {
+  await page.clock.install();
+  const state = await fixture(page);
+  await page.goto(`/brands/${BRAND}/generate`);
+  await submit(page);
+  await expect(page.getByText("Queued", { exact: true })).toBeVisible();
+  let listRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/generations"))
+      listRequests += 1;
+  });
+  await page.goto(`/brands/${BRAND}/history`);
+  await expect(
+    page.getByRole("article").getByText("Queued", { exact: true })
+  ).toBeVisible();
+  const initial = listRequests;
+  await page.clock.fastForward(2100);
+  await page.clock.fastForward(2100);
+  await page.clock.fastForward(2100);
+  expect(listRequests).toBe(initial);
+  state.generation!.status = "succeeded";
+  state.generation!.image_url =
+    "http://127.0.0.1:3011/fixture-image.png?token=done";
+  await page.clock.fastForward(2100);
+  await expect(
+    page.getByRole("img", {
+      name: "A bright garden product launch",
+      exact: true,
+    })
+  ).toHaveAttribute("src", /token=done/);
+  expect(listRequests).toBe(initial + 1);
 });
 
 test("unauthenticated generation access redirects to login", async ({

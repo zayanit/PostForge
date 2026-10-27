@@ -264,6 +264,46 @@ def test_atomic_claim_and_stale_lease_cannot_publish(setup):
     assert store.finish(recovered, error="GENERATION_INTERRUPTED")
 
 
+def test_claims_follow_oldest_job_across_brands(setup):
+    store, owner, older_brand = setup
+    newer_brand, newer_owner, key = uuid4(), uuid4(), uuid4()
+    with store.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO brands(id,owner_user_id,name,created_at) VALUES "
+                "(:brand,:owner,'Newer brand',now()+interval '1 day')"
+            ),
+            dict(brand=newer_brand, owner=newer_owner),
+        )
+        connection.execute(
+            text(
+                "INSERT INTO provider_keys(id,brand_id,provider,is_active) "
+                "VALUES (:key,:brand,'openai',true)"
+            ),
+            dict(key=key, brand=newer_brand),
+        )
+    try:
+        first = store.submit(owner, older_brand, payload(), uuid4())
+        other = store.submit(str(newer_owner), newer_brand, payload(), uuid4())
+        store.submit(owner, older_brand, payload(), uuid4())
+        claimed = store.claim()
+        assert claimed["id"] == first["id"]
+        store.finish(claimed, error="PROVIDER_TIMEOUT")
+        # The older brand still has queued work, but the other brand waited longer.
+        assert store.claim()["id"] == other["id"]
+    finally:
+        with store.engine.begin() as connection:
+            for table, column in (
+                ("generations", "brand_id"),
+                ("provider_keys", "brand_id"),
+                ("brands", "id"),
+            ):
+                connection.execute(
+                    text(f"DELETE FROM {table} WHERE {column}=:brand"),
+                    dict(brand=newer_brand),
+                )
+
+
 def test_processing_cannot_be_deleted_pending_can(setup):
     store, owner, brand = setup
     row = store.submit(owner, brand, payload(), uuid4())

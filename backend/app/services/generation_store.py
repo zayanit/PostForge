@@ -203,13 +203,17 @@ class GenerationStore:
             )
 
     def claim(self):
-        # Lock brands before jobs for submission, deletion, and claims.
+        # Lock brands before jobs for submission, deletion, and claims. Brands are
+        # ordered by their oldest claimable job so one busy brand cannot starve others.
         with self.engine.begin() as connection:
             candidate = connection.execute(text("""
                 SELECT b.id FROM brands b WHERE b.deletion_state='active' AND EXISTS
                 ( SELECT 1 FROM generations g WHERE g.brand_id=b.id AND NOT
                 g.cleanup_required AND (g.status='pending' OR (g.status='processing'
-                AND g.lease_expires_at < clock_timestamp())) ) ORDER BY b.created_at
+                AND g.lease_expires_at < clock_timestamp())) ) ORDER BY ( SELECT
+                min(g.created_at) FROM generations g WHERE g.brand_id=b.id AND NOT
+                g.cleanup_required AND (g.status='pending' OR (g.status='processing'
+                AND g.lease_expires_at < clock_timestamp())) ), b.id
                 FOR UPDATE OF b SKIP LOCKED LIMIT 1
             """)).scalar_one_or_none()
             if candidate is None:

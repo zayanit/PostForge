@@ -27,10 +27,16 @@ export default function HistoryPage() {
     else dialog.current?.close();
   }, [confirm]);
 
+  // Full refreshes re-sign every image URL, which makes the browser download every
+  // image again. Run them only to renew links (they expire after five minutes),
+  // after a deletion, or when an in-progress item finishes.
+  const query = `${brandId}|${page}|${status}`;
+  const lastQuery = useRef<string | null>(null);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
-    setHistory(null);
+    if (lastQuery.current !== query) setHistory(null);
+    lastQuery.current = query;
     async function refresh() {
       try {
         const result = await generationApi<History>(
@@ -43,10 +49,7 @@ export default function HistoryPage() {
           }
           setHistory(result);
           setError(null);
-          timer = setTimeout(
-            refresh,
-            result.generations.some(activeGeneration) ? 2000 : 240000
-          );
+          timer = setTimeout(refresh, 240000);
         }
       } catch (cause) {
         if (active) {
@@ -62,7 +65,61 @@ export default function HistoryPage() {
       active = false;
       clearTimeout(timer);
     };
-  }, [brandId, page, status, revision]);
+  }, [brandId, page, status, revision, query]);
+
+  // Poll only in-progress items; they have no image URL to re-sign.
+  const activeIds =
+    history?.generations
+      .filter(activeGeneration)
+      .map((generation) => generation.id)
+      .join(",") ?? "";
+  useEffect(() => {
+    if (!activeIds) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const ids = activeIds.split(",");
+    async function poll() {
+      try {
+        const current = await Promise.all(
+          ids.map((id) =>
+            generationApi<Generation>(`/${brandId}/generations/${id}`)
+          )
+        );
+        if (!active) return;
+        if (current.some((generation) => !activeGeneration(generation))) {
+          // Reload once so filters, totals, and the finished image are current.
+          setRevision((value) => value + 1);
+          return;
+        }
+        const byId = new Map(
+          current.map((generation) => [generation.id, generation])
+        );
+        setHistory(
+          (previous) =>
+            previous && {
+              ...previous,
+              generations: previous.generations.map(
+                (generation) => byId.get(generation.id) ?? generation
+              ),
+            }
+        );
+        setError(null);
+        timer = setTimeout(poll, 2000);
+      } catch (cause) {
+        if (active) {
+          setError(
+            cause instanceof Error ? cause.message : "Unable to load history."
+          );
+          timer = setTimeout(poll, 10000);
+        }
+      }
+    }
+    timer = setTimeout(poll, 2000);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [brandId, activeIds]);
 
   async function remove() {
     if (!confirm) return;

@@ -118,8 +118,10 @@ no DB/external calls) and `127.0.0.1:3000/login` (frontend — note: *not* `/`, 
 is behind the auth-guard middleware and would redirect; `/login` is the actual public
 route). Both checks require an explicit `2xx` with redirects disabled
 (`--max-redirs 0`) — `curl -f` alone isn't enough since it treats redirects as
-success. Health reflects only these two local processes; it deliberately never
-calls Supabase, so a Supabase outage doesn't flap container health.
+success. It also requires the generation worker's heartbeat file to be under 60s
+old. Health reflects only these local processes; it deliberately never calls
+Supabase, so a Supabase outage doesn't flap container health — the worker writes
+its heartbeat from a task that never touches the database, so keep it that way.
 
 Full behavioral contracts: `specs/002-dockerization/contracts/entrypoint.md` and
 `.../healthcheck.md`. Operational runbook (build/run/deploy/troubleshoot):
