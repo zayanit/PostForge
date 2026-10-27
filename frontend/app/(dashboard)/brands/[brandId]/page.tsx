@@ -465,7 +465,7 @@ export default function BrandDetailPage() {
           <label className="block text-sm font-medium text-red-950">
             Type <span className="font-semibold">{brand.name}</span> to confirm
             <input
-              className="mt-2 block w-full rounded-md border border-red-300 bg-white px-3 py-2 text-sm text-gray-950 outline-none focus:border-red-600"
+              className="mt-2 block w-full rounded-md border border-red-300 bg-white px-3 py-2 text-sm text-gray-950 outline-hidden focus:border-red-600"
               type="text"
               value={confirmationName}
               disabled={isDeleting || isUploading || isRemoving}

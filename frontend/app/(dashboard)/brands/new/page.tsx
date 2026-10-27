@@ -18,7 +18,7 @@ const brandFormSchema = z.object({
     const normalized = normalizeBrandName(value);
     if (normalized.length < 2 || normalized.length > 120) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "Brand name must be between 2 and 120 characters.",
       });
     }
@@ -120,14 +120,14 @@ export default function NewBrandPage() {
       </div>
 
       <form
-        className="space-y-6 rounded-xl border bg-white p-6 shadow-sm"
+        className="space-y-6 rounded-xl border bg-white p-6 shadow-xs"
         onSubmit={handleSubmit(submit)}
         noValidate
       >
         <label className="block space-y-2">
           <span className="text-sm font-medium">Brand name</span>
           <input
-            className="w-full rounded-md border px-3 py-2 outline-none transition focus:border-black focus:ring-2 focus:ring-black/10"
+            className="w-full rounded-md border px-3 py-2 outline-hidden transition focus:border-black focus:ring-2 focus:ring-black/10"
             type="text"
             autoComplete="organization"
             autoFocus
