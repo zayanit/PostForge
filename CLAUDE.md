@@ -159,7 +159,7 @@ supabase migration up   # apply new migrations under supabase/migrations/
 **Docker**:
 ```bash
 docker build --platform linux/amd64 -t postforge:local .
-docker run -d --name postforge --platform linux/amd64 --env-file .env.docker -p 3000:3000 postforge:local
+docker run -d --name postforge --platform linux/amd64 --env-file .env.docker --stop-timeout 300 -p 3000:3000 postforge:local
 ```
 See `docs/docker.md` for the full required env var list and `specs/002-dockerization/quickstart.md`
 for end-to-end validation scenarios (including a deterministic crash-restart test using

@@ -171,3 +171,32 @@ def test_liveness_heartbeat_does_not_depend_on_the_database(monkeypatch, tmp_pat
 
     assert asyncio.run(scenario())
     assert not heartbeat.exists()
+
+
+def test_sigterm_finishes_the_current_job_and_claims_no_more(monkeypatch, tmp_path):
+    import os
+    import signal
+
+    events = []
+
+    class OneJobStore:
+        def claim(self):
+            events.append("claim")
+            return {**job(), "lease_token": uuid4()}
+
+        def heartbeat(self, _job):
+            return True
+
+    async def slow_job(_store, _storage, _job):
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.sleep(0.2)
+        events.append("finished")
+
+    monkeypatch.setattr(worker, "HEARTBEAT_FILE", tmp_path / "heartbeat")
+    monkeypatch.setattr(worker, "assert_database_role_privileges", lambda: None)
+    monkeypatch.setattr(worker, "get_generation_store", OneJobStore)
+    monkeypatch.setattr(worker, "get_generation_storage", Storage)
+    monkeypatch.setattr(worker, "process_job", slow_job)
+
+    asyncio.run(asyncio.wait_for(worker.run_worker(), timeout=5))
+    assert events == ["claim", "finished"]

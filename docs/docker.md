@@ -62,6 +62,7 @@ chmod 600 .env.docker
 
 docker run -d --name postforge --platform linux/amd64 \
   --env-file .env.docker \
+  --stop-timeout 300 \
   -p 3000:3000 \
   postforge:local
 ```
@@ -184,8 +185,17 @@ docker inspect --format '{{json .State.Health.Log}}' postforge
 
 The entrypoint supervises `uvicorn` and `next start`. If either exits unexpectedly, it
 restarts only that process with a new PID; the other process and the container remain
-running. `tini` forwards stop signals, and the entrypoint waits for both children during
-intentional shutdown. See the exact
+running. `tini` forwards stop signals, and the entrypoint waits for every child during
+intentional shutdown.
+
+On a stop signal the generation worker claims no new jobs but finishes the one in
+progress, which can take up to about 4.5 minutes (a 180-second provider call, up to 60
+seconds waiting for the brand's storage lock, and a 30-second upload). Docker's default
+stop timeout is 10 seconds, so the commands above pass `--stop-timeout 300`; `make up`
+does the same. If the container is killed sooner, the job ends as
+`GENERATION_INTERRUPTED` after the provider has already charged the user's key. On a
+hosting platform, set its termination grace period to at least 300 seconds where it
+allows it. Otherwise deploy when no generations are in progress. See the exact
 [entrypoint contract](../specs/002-dockerization/contracts/entrypoint.md).
 
 ## Deploy to Bunny Magic Container
@@ -269,6 +279,7 @@ keeping container port 3000 unchanged:
 ```bash
 docker run -d --name postforge --platform linux/amd64 \
   --env-file .env.docker \
+  --stop-timeout 300 \
   -p 3001:3000 \
   postforge:local
 ```

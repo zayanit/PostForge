@@ -304,6 +304,28 @@ def test_claims_follow_oldest_job_across_brands(setup):
                 )
 
 
+def test_history_reads_do_not_wait_for_brand_row_locks(setup):
+    store, owner, brand = setup
+    row = store.submit(owner, brand, payload(), uuid4())
+    executor = ThreadPoolExecutor(2)
+    try:
+        # Leaving this block releases the row lock, so a regression fails with a
+        # timeout instead of hanging the executor shutdown below.
+        with store.engine.begin() as connection:
+            connection.execute(
+                text("SELECT 1 FROM brands WHERE id=:brand FOR UPDATE"),
+                dict(brand=brand),
+            )
+            listed = executor.submit(store.list, owner, brand, 1, 20)
+            detail = executor.submit(store.get, owner, brand, row["id"])
+            assert listed.result(timeout=5)[1] == 1
+            assert detail.result(timeout=5)["id"] == row["id"]
+    finally:
+        executor.shutdown(wait=True)
+    with pytest.raises(LookupError):
+        store.get(str(uuid4()), brand, row["id"])
+
+
 def test_processing_cannot_be_deleted_pending_can(setup):
     store, owner, brand = setup
     row = store.submit(owner, brand, payload(), uuid4())

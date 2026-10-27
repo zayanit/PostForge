@@ -10,7 +10,7 @@ import warnings
 import httpx
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from ..presets import provider_size
+from ..presets import composition_guidance, provider_size
 
 MAX_RESPONSE_BYTES = 70 * 1024 * 1024
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
@@ -71,6 +71,8 @@ async def generate_openai(job, key: str, transport=None) -> tuple[bytes, str | N
                         "prompt": (
                             f"Brand context:\n{job['context_snapshot']}"
                             f"\n\nImage request:\n{job['prompt']}"
+                            "\n\nComposition:\n"
+                            f"{composition_guidance(job['width'], job['height'])}"
                         ),
                     },
                 ) as response:

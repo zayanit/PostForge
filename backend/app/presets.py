@@ -22,3 +22,22 @@ def provider_size(width: int, height: int) -> str:
     if width == height:
         return "1024x1024"
     return "1536x1024" if width > height else "1024x1536"
+
+
+def composition_guidance(width: int, height: int) -> str:
+    """Tell the model which part of its canvas survives the center crop to the
+    preset, so subjects and text are not cut off on wide or tall presets."""
+    canvas_width, canvas_height = map(int, provider_size(width, height).split("x"))
+    target, canvas = width / height, canvas_width / canvas_height
+    shape = f"The final image is {width}x{height} pixels"
+    if abs(target - canvas) < 0.01:
+        return f"{shape}; the whole image is used."
+    if target > canvas:
+        kept, axis, edges = canvas / target, "height", "top and bottom"
+    else:
+        kept, axis, edges = target / canvas, "width", "left and right"
+    return (
+        f"{shape}, so the {edges} of the image will be cropped away. Keep the main "
+        f"subject and any text entirely within the middle {int(kept * 100)}% of the "
+        f"image {axis}."
+    )

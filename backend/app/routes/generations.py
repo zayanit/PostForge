@@ -3,6 +3,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from starlette.concurrency import run_in_threadpool
 
 from ..auth import CurrentUserDep
 from ..models.generation import (
@@ -18,10 +19,12 @@ from ..services.generation_storage import GenerationStorage, get_generation_stor
 from ..services.generation_store import (
     GenerationConflict,
     GenerationStore,
-    generation_asset_guard,
+    generation_asset_guard_in_thread,
     get_generation_store,
 )
 
+# Handlers are async because Storage calls are async; every synchronous database
+# call runs in the thread pool so a slow query or lock wait cannot stall the loop.
 router = APIRouter(prefix="/api/v1/brands", tags=["generations"])
 StoreDep = Annotated[GenerationStore, Depends(get_generation_store)]
 StorageDep = Annotated[GenerationStorage, Depends(get_generation_storage)]
@@ -84,9 +87,10 @@ async def submit(
     request_id: Annotated[UUID, Header(alias="Idempotency-Key")],
 ):
     try:
-        return await present(
-            store.submit(current_user.user_id, brand_id, payload, request_id), storage
+        row = await run_in_threadpool(
+            store.submit, current_user.user_id, brand_id, payload, request_id
         )
+        return await present(row, storage)
     except (
         LookupError,
         GenerationConflict,
@@ -108,8 +112,8 @@ async def history(
     status: GenerationStatus | None = None,
 ):
     try:
-        rows, total = store.list(
-            current_user.user_id, brand_id, page, per_page, provider, status
+        rows, total = await run_in_threadpool(
+            store.list, current_user.user_id, brand_id, page, per_page, provider, status
         )
         return GenerationList(
             generations=[await present(row, storage) for row in rows],
@@ -130,9 +134,10 @@ async def detail(
     storage: StorageDep,
 ):
     try:
-        return await present(
-            store.get(current_user.user_id, brand_id, generation_id), storage
+        row = await run_in_threadpool(
+            store.get, current_user.user_id, brand_id, generation_id
         )
+        return await present(row, storage)
     except (LookupError, BrandStorageError) as exc:
         raise mapped_error(exc) from exc
 
@@ -147,11 +152,17 @@ async def delete(
 ):
     try:
         # Resolve ownership before taking a shared asset lock or touching storage.
-        store.get(current_user.user_id, brand_id, generation_id)
-        with generation_asset_guard(store.engine, brand_id):
-            store.fence_delete(current_user.user_id, brand_id, generation_id)
+        await run_in_threadpool(
+            store.get, current_user.user_id, brand_id, generation_id
+        )
+        async with generation_asset_guard_in_thread(store.engine, brand_id):
+            await run_in_threadpool(
+                store.fence_delete, current_user.user_id, brand_id, generation_id
+            )
             await storage.delete(storage.path(brand_id, generation_id))
-            store.finish_delete(current_user.user_id, brand_id, generation_id)
+            await run_in_threadpool(
+                store.finish_delete, current_user.user_id, brand_id, generation_id
+            )
         return Response(status_code=204)
     except (LookupError, GenerationConflict, BrandStorageError) as exc:
         raise mapped_error(exc) from exc
