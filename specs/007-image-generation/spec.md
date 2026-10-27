@@ -139,7 +139,7 @@ An owner permanently deletes a generation (its PNG and record), and deleting a b
 - **SC-003**: No test scenario (restart, lease loss, brand fencing, uncertain upload) produces a second provider call or a publication by a stale worker.
 - **SC-004**: Cross-owner requests for list, detail, sign, and delete disclose no data (contract and RLS tests).
 - **SC-005**: Deletion leaves no stored object and no row for the generation (integration test against isolated PostgreSQL; real Storage is a release gate).
-- **SC-006**: A history page with in-progress items does not re-request the list or re-sign images while polling.
+- **SC-006**: While a history page has in-progress items, its frequent (2-second) status polls fetch only those items and never re-request the list or re-sign images. Full-list refreshes happen only to renew image links (every four minutes), once when an in-progress item finishes, and after a deletion.
 
 ## Assumptions
 

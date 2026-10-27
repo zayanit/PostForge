@@ -25,6 +25,9 @@ export default function GeneratePage() {
   const [preset, setPreset] = useState("");
   const [generation, setGeneration] = useState<Generation | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Kept apart from load/refresh errors: it describes one specific submission and
+  // is cleared once the prompt or preset changes.
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const submission = useRef<{ body: string; key: string } | null>(null);
@@ -116,6 +119,7 @@ export default function GeneratePage() {
     event.preventDefault();
     if (submitting || !preset || prompt.trim().length < 3) return;
     setError(null);
+    setSubmitError(null);
     setSubmitting(true);
     const body = JSON.stringify({
       prompt: prompt.trim(),
@@ -137,7 +141,7 @@ export default function GeneratePage() {
         `${window.location.pathname}?generation=${result.id}`
       );
     } catch (cause) {
-      setError(
+      setSubmitError(
         cause instanceof GenerationNetworkError
           ? "We couldn’t confirm your submission. Submitting again is safe: it won’t create a duplicate image."
           : cause instanceof Error
@@ -196,7 +200,10 @@ export default function GeneratePage() {
             maxLength={4000}
             value={prompt}
             disabled={busy}
-            onChange={(event) => setPrompt(event.target.value)}
+            onChange={(event) => {
+              setPrompt(event.target.value);
+              setSubmitError(null);
+            }}
           />
         </label>
         <p className="text-xs text-gray-500">
@@ -209,7 +216,10 @@ export default function GeneratePage() {
             required
             value={preset}
             disabled={busy}
-            onChange={(event) => setPreset(event.target.value)}
+            onChange={(event) => {
+              setPreset(event.target.value);
+              setSubmitError(null);
+            }}
           >
             <option value="">Choose a platform preset</option>
             {presets.map((item) => (
@@ -245,9 +255,9 @@ export default function GeneratePage() {
           </Link>
         </div>
       </form>
-      {error ? (
+      {submitError || error ? (
         <p className="text-sm text-red-700" role="alert">
-          {error}
+          {submitError ?? error}
         </p>
       ) : null}
       {generation ? <GenerationResult generation={generation} /> : null}

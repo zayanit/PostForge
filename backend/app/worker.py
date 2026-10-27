@@ -8,7 +8,7 @@ import os
 import signal
 import tempfile
 import time
-from contextlib import ExitStack, asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,7 +18,7 @@ from .services.brand_storage import BrandStorageError
 from .services.generation_storage import get_generation_storage
 from .services.generation_store import (
     GenerationConflict,
-    generation_asset_guard,
+    generation_asset_guard_in_thread,
     get_generation_store,
 )
 from .services.image_generation import GenerationFailure, generate_openai
@@ -37,12 +37,16 @@ HEARTBEAT_FILE = Path(
 )
 
 
+# Store methods are synchronous SQLAlchemy calls. They run in worker threads so a
+# slow query cannot stall the liveness and lease-renewal tasks on the event loop.
 @asynccontextmanager
 async def wait_for_asset_guard(engine, brand_id):
     for attempt in range(GUARD_ATTEMPTS):
-        with ExitStack() as stack:
+        async with AsyncExitStack() as stack:
             try:
-                stack.enter_context(generation_asset_guard(engine, brand_id))
+                await stack.enter_async_context(
+                    generation_asset_guard_in_thread(engine, brand_id)
+                )
             except GenerationConflict:
                 if attempt + 1 == GUARD_ATTEMPTS:
                     raise
@@ -57,7 +61,7 @@ async def process_job(store, storage, job, generate=generate_openai) -> dict:
     path = storage.path(job["brand_id"], job["id"])
     if job["recovery"]:
         async with wait_for_asset_guard(store.engine, job["brand_id"]):
-            if not store.usable(job):
+            if not await asyncio.to_thread(store.usable, job):
                 return {"outcome": "lease_lost"}
             # Respect a previous upload's uncertainty window even if its worker
             # lease expired early. Do not turn an in-flight write into a failed row.
@@ -65,26 +69,32 @@ async def process_job(store, storage, job, generate=generate_openai) -> dict:
                 if job["upload_fence_until"] > datetime.now(UTC):
                     return {"outcome": "upload_pending"}
             if await storage.object_exists(path):
-                published = store.finish(job, path=path)
+                published = await asyncio.to_thread(store.finish, job, path=path)
                 return {"outcome": "recovered" if published else "lease_lost"}
-            if not store.finish(job, error="GENERATION_INTERRUPTED"):
+            if not await asyncio.to_thread(
+                store.finish, job, error="GENERATION_INTERRUPTED"
+            ):
                 return {"outcome": "lease_lost"}
             return {"outcome": "failed", "code": "GENERATION_INTERRUPTED"}
     error = None
     try:
-        key = store.credential(job)
+        key = await asyncio.to_thread(store.credential, job)
         if not key:
             raise GenerationFailure("OPENAI_KEY_REQUIRED")
-        if not store.usable(job):
+        if not await asyncio.to_thread(store.usable, job):
             return {"outcome": "lease_lost"}
         data, request_id = await generate(job, key)
         key = None
         async with wait_for_asset_guard(store.engine, job["brand_id"]):
-            if not store.usable(job) or not store.begin_upload(job):
+            if not await asyncio.to_thread(
+                store.usable, job
+            ) or not await asyncio.to_thread(store.begin_upload, job):
                 return {"outcome": "lease_lost"}
             # An uncertain upload remains processing for lease-based reconciliation.
             await storage.upload(path, data)
-            if not store.finish(job, path=path, provider_request_id=request_id):
+            if not await asyncio.to_thread(
+                store.finish, job, path=path, provider_request_id=request_id
+            ):
                 return {"outcome": "lease_lost"}
             return {"outcome": "succeeded", "provider_request_id": request_id}
     except GenerationFailure as exc:
@@ -93,7 +103,7 @@ async def process_job(store, storage, job, generate=generate_openai) -> dict:
         return {"outcome": "upload_uncertain"}
     except GenerationConflict:
         return {"outcome": "asset_busy"}
-    if not store.finish(job, error=error):
+    if not await asyncio.to_thread(store.finish, job, error=error):
         return {"outcome": "lease_lost"}
     return {"outcome": "failed", "code": error}
 
@@ -135,7 +145,7 @@ async def run_worker():
         while True:
             await asyncio.sleep(HEARTBEAT_SECONDS)
             try:
-                if not store.heartbeat(job):
+                if not await asyncio.to_thread(store.heartbeat, job):
                     return
             except Exception as exc:
                 # A transient database error must not end lease renewal.
@@ -153,7 +163,7 @@ async def run_worker():
             pulse = None
             job = None
             try:
-                job = store.claim()
+                job = await asyncio.to_thread(store.claim)
                 if job:
                     pulse = asyncio.create_task(lease_heartbeat(job))
                     started = time.monotonic()

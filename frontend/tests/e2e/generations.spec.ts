@@ -289,6 +289,24 @@ test("uncertain submissions reuse their idempotency key on explicit retry", asyn
   expect(state.requests[0]).toBe(state.requests[1]);
 });
 
+test("a submission failure message clears when the input changes", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  state.failOnce = true;
+  await page.goto(`/brands/${BRAND}/generate`);
+  await submit(page);
+  const message = page
+    .getByRole("alert")
+    .filter({ hasText: "Submitting again is safe" });
+  await expect(message).toBeVisible();
+  // getByLabel stops matching once the wrapping label contains typed text.
+  await page
+    .getByRole("textbox", { name: "Image prompt", exact: true })
+    .fill("A different garden product launch");
+  await expect(message).toHaveCount(0);
+});
+
 test("failure history is actionable and deletion can be retried", async ({
   page,
 }) => {

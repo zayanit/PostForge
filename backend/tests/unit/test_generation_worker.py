@@ -1,11 +1,14 @@
 import asyncio
 import json
+import signal
+import time
 from contextlib import nullcontext
 from uuid import uuid4
 
 import pytest
 from backend.app import worker
 from backend.app.services.brand_storage import BrandStorageUnknownError
+from backend.app.services import generation_store
 from backend.app.services.generation_store import GenerationConflict
 
 
@@ -50,9 +53,13 @@ class Storage:
             raise BrandStorageUnknownError
 
 
+# The worker takes the asset lock through generation_asset_guard_in_thread, which
+# calls generation_store.generation_asset_guard; stub that to avoid a database.
 @pytest.fixture(autouse=True)
 def guard(monkeypatch):
-    monkeypatch.setattr(worker, "generation_asset_guard", lambda *_: nullcontext())
+    monkeypatch.setattr(
+        generation_store, "generation_asset_guard", lambda *_: nullcontext()
+    )
 
 
 def job(recovery=False):
@@ -119,7 +126,7 @@ def test_busy_asset_guard_is_awaited_instead_of_discarding_the_image(monkeypatch
             raise GenerationConflict("GENERATION_ASSET_BUSY")
         return nullcontext()
 
-    monkeypatch.setattr(worker, "generation_asset_guard", busy_then_free)
+    monkeypatch.setattr(generation_store, "generation_asset_guard", busy_then_free)
     monkeypatch.setattr(worker, "GUARD_RETRY_SECONDS", 0)
 
     async def provider(*_):
@@ -137,7 +144,7 @@ def test_persistently_busy_asset_guard_leaves_job_for_reconciliation(monkeypatch
     def always_busy(*_):
         raise GenerationConflict("GENERATION_ASSET_BUSY")
 
-    monkeypatch.setattr(worker, "generation_asset_guard", always_busy)
+    monkeypatch.setattr(generation_store, "generation_asset_guard", always_busy)
     monkeypatch.setattr(worker, "GUARD_ATTEMPTS", 3)
     monkeypatch.setattr(worker, "GUARD_RETRY_SECONDS", 0)
 
@@ -175,9 +182,6 @@ def test_liveness_heartbeat_does_not_depend_on_the_database(monkeypatch, tmp_pat
 
 
 def test_sigterm_finishes_the_current_job_and_claims_no_more(monkeypatch, tmp_path):
-    import os
-    import signal
-
     events = []
 
     class OneJobStore:
@@ -189,9 +193,12 @@ def test_sigterm_finishes_the_current_job_and_claims_no_more(monkeypatch, tmp_pa
             return True
 
     async def slow_job(_store, _storage, _job):
-        os.kill(os.getpid(), signal.SIGTERM)
+        # raise_signal runs the registered handler on every platform; os.kill with
+        # SIGTERM would terminate the process outright on Windows.
+        signal.raise_signal(signal.SIGTERM)
         await asyncio.sleep(0.2)
         events.append("finished")
+        return {"outcome": "succeeded"}
 
     monkeypatch.setattr(worker, "HEARTBEAT_FILE", tmp_path / "heartbeat")
     monkeypatch.setattr(worker, "assert_database_role_privileges", lambda: None)
@@ -217,7 +224,9 @@ def _run_one(monkeypatch, tmp_path, outcome_or_error):
         def claim(self):
             self.calls += 1
             if self.calls > 1:
-                raise asyncio.CancelledError
+                # Stop the worker the way the container does.
+                signal.raise_signal(signal.SIGTERM)
+                return None
             return claimed
 
         def heartbeat(self, _job):
@@ -239,8 +248,7 @@ def _run_one(monkeypatch, tmp_path, outcome_or_error):
     monkeypatch.setattr(worker, "process_job", fake_process)
     monkeypatch.setattr(worker.asyncio, "sleep", _fast_sleep)
     try:
-        with pytest.raises(asyncio.CancelledError):
-            asyncio.run(worker.run_worker())
+        asyncio.run(asyncio.wait_for(worker.run_worker(), timeout=5))
     finally:
         worker.logger.removeHandler(handler)
     return claimed, [json.loads(line) for line in records]
@@ -274,3 +282,42 @@ def test_unexpected_error_logs_class_name_but_never_its_text(monkeypatch, tmp_pa
     assert error["error_type"] == "RuntimeError"
     assert error["generation_id"] == str(claimed["id"])
     assert "sk-secret" not in json.dumps(logs)
+
+
+def test_blocked_database_call_does_not_stall_liveness(monkeypatch, tmp_path):
+    import threading
+
+    heartbeat = tmp_path / "heartbeat"
+    release = threading.Event()
+
+    class StuckStore:
+        def claim(self):
+            # On the event loop this would block liveness until released.
+            release.wait(timeout=5)
+            return None
+
+    monkeypatch.setattr(worker, "HEARTBEAT_FILE", heartbeat)
+    monkeypatch.setattr(worker, "HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setattr(worker, "assert_database_role_privileges", lambda: None)
+    monkeypatch.setattr(worker, "get_generation_store", StuckStore)
+    monkeypatch.setattr(worker, "get_generation_storage", Storage)
+
+    async def scenario():
+        started = time.monotonic()
+        task = asyncio.create_task(worker.run_worker())
+        await asyncio.sleep(0.05)
+        first = heartbeat.read_text() if heartbeat.exists() else None
+        await asyncio.sleep(0.2)
+        refreshed = heartbeat.exists() and heartbeat.read_text() != first
+        # If claim() blocked the loop, these sleeps could only resume after the
+        # 5-second release timeout.
+        elapsed = time.monotonic() - started
+        release.set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return refreshed, elapsed
+
+    refreshed, elapsed = asyncio.run(scenario())
+    assert refreshed
+    assert elapsed < 2
